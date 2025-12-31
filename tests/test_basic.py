@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Quick test script for py-chainlink-streams client."""
+"""Basic integration tests for py-chainlink-streams client."""
 
 import sys
 import os
 
 # Add src to path for testing
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
 
 def test_imports():
     """Test that all imports work."""
@@ -33,6 +34,7 @@ def test_imports():
         traceback.print_exc()
         return False
 
+
 def test_schema_version():
     """Test schema version detection."""
     print("\nTesting schema version detection...")
@@ -48,6 +50,7 @@ def test_schema_version():
         import traceback
         traceback.print_exc()
         return False
+
 
 def test_fixed_point_conversion():
     """Test fixed point to decimal conversion."""
@@ -65,6 +68,7 @@ def test_fixed_point_conversion():
         import traceback
         traceback.print_exc()
         return False
+
 
 def test_hmac_generation():
     """Test HMAC and auth header generation."""
@@ -94,6 +98,7 @@ def test_hmac_generation():
         traceback.print_exc()
         return False
 
+
 def test_constants():
     """Test constants are accessible."""
     print("\nTesting constants...")
@@ -119,6 +124,7 @@ def test_constants():
         import traceback
         traceback.print_exc()
         return False
+
 
 def main():
     """Run all tests."""
@@ -156,6 +162,7 @@ def main():
     else:
         print("❌ Some tests failed")
         return 1
+
 
 if __name__ == '__main__':
     sys.exit(main())

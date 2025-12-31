@@ -2,6 +2,8 @@
 
 > **⚠️ Unofficial Client**: This is an **unofficial** Python SDK for Chainlink Data Streams API. It is not maintained or endorsed by Chainlink Labs or the Chainlink Foundation. Use at your own risk.
 
+> **🤖 AI Implementation**: This Python SDK, including all code, tests, and documentation, was implemented by **Cursor** using the **Auto** agent router. The implementation was generated through AI-assisted development using various language models and has not been manually written by human developers.
+
 A lightweight Python SDK for Chainlink Data Streams API with support for both HTTP REST API and WebSocket connections, including report decoding.
 
 ## Features
@@ -242,6 +244,51 @@ Feed 0x00039d9e45394f473ab1f050a1b963e6b05351e52d71e507509ada0c95ed75b8 uses sch
 - `MAINNET_WS_HOST` - Mainnet WebSocket host
 - `TESTNET_API_HOST` - Testnet API host
 - `TESTNET_WS_HOST` - Testnet WebSocket host
+
+## Testing
+
+The SDK includes comprehensive unit tests with **90%+ code coverage**.
+
+### Test Coverage
+
+- ✅ **123 unit tests** covering all core functionality
+- ✅ **5 integration tests** for basic functionality verification
+- ✅ All modules tested: `client.py`, `report.py`, `decode.py`, `constants.py`
+- ✅ Mocked network tests for HTTP and WebSocket operations
+- ✅ Error handling and edge cases covered
+
+### Running Tests
+
+```bash
+# Install test dependencies
+uv sync --extra dev
+
+# Run all tests
+pytest tests/
+
+# Run with coverage report
+pytest --cov=py_chainlink_streams --cov-report=html tests/
+
+# Run specific test file
+pytest tests/test_client.py
+
+# Run only unit tests (skip integration)
+pytest -m "not integration" tests/
+```
+
+### Test Structure
+
+```
+tests/
+├── test_constants.py    # 7 tests - Constants validation
+├── test_client.py       # 35 tests - Authentication & WebSocket connection
+├── test_decode.py       # 46 tests - Report decoding & price conversion
+├── test_report.py       # 30 tests - HTTP fetching & WebSocket streaming
+├── test_basic.py        # 5 tests - Basic integration tests
+└── conftest.py          # Shared fixtures and test utilities
+```
+
+See [`tests/TEST_OUTLINE.md`](tests/TEST_OUTLINE.md) for detailed test coverage documentation.
 
 ## Official SDKs
 
