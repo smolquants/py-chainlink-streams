@@ -1,0 +1,7 @@
+[project]
+name = "py-chainlink-streams"
+version = "0.1.0"
+description = "A Chainlink Data Streams Python client SDK implementation"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
