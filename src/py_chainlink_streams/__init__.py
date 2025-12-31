@@ -8,13 +8,16 @@ Based on: https://docs.chain.link/data-streams/reference/data-streams-api/authen
 """
 
 from py_chainlink_streams.client import (
-    fetch_single_report,
-    connect_websocket,
-    stream_reports,
-    stream_reports_with_keepalive,
     get_api_credentials,
     generate_hmac,
     generate_auth_headers,
+    connect_websocket,
+)
+
+from py_chainlink_streams.report import (
+    fetch_single_report,
+    stream_reports,
+    stream_reports_with_keepalive,
 )
 
 from py_chainlink_streams.decode import (
@@ -39,14 +42,15 @@ from py_chainlink_streams.constants import (
 __version__ = "0.1.0"
 
 __all__ = [
-    # Client functions
+    # Client functions (authentication)
+    "get_api_credentials",
+    "generate_hmac",
+    "generate_auth_headers",
+    # Report functions
     "fetch_single_report",
     "connect_websocket",
     "stream_reports",
     "stream_reports_with_keepalive",
-    "get_api_credentials",
-    "generate_hmac",
-    "generate_auth_headers",
     # Decode functions
     "get_schema_version",
     "decode_report_structure",
