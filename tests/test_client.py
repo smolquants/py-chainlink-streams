@@ -9,12 +9,13 @@ from unittest.mock import patch, MagicMock, AsyncMock
 import websockets
 from websockets.client import WebSocketClientProtocol
 
-from py_chainlink_streams.client import (
+from py_chainlink_streams.auth import (
     get_api_credentials,
     generate_hmac,
     generate_auth_headers,
-    connect_websocket,
 )
+from py_chainlink_streams.client import ChainlinkClient
+from py_chainlink_streams.config import ChainlinkConfig
 from py_chainlink_streams.constants import (
     MAINNET_WS_HOST,
     DEFAULT_PING_INTERVAL,
@@ -206,105 +207,71 @@ class TestGenerateAuthHeaders:
         assert len(headers["X-Authorization-Signature-SHA256"]) == 64
 
 
-class TestConnectWebsocket:
-    """Test connect_websocket function."""
+class TestChainlinkClientConnectWebsocket:
+    """Test ChainlinkClient._connect_websocket internal method."""
+
+    @pytest.fixture
+    def client(self, mock_api_credentials):
+        """Create a ChainlinkClient instance for testing."""
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        return ChainlinkClient(config)
 
     @pytest.mark.asyncio
-    async def test_raises_when_feed_ids_empty(self, mock_api_credentials):
+    async def test_raises_when_feed_ids_empty(self, client):
         """Test raises ValueError when feed_ids is empty list."""
         with pytest.raises(ValueError, match="No feed ID\\(s\\) provided"):
-            await connect_websocket([], None, 30, 60)
+            await client._connect_websocket([])
 
     @pytest.mark.asyncio
-    async def test_raises_when_api_credentials_not_set(self, clear_api_credentials):
-        """Test raises ValueError when API credentials not set."""
-        with pytest.raises(ValueError, match="API credentials not set"):
-            await connect_websocket(["0x123"], None, 30, 60)
-
-    @pytest.mark.asyncio
-    async def test_uses_mainnet_ws_host_by_default(self, mock_api_credentials, sample_feed_ids):
-        """Test uses MAINNET_WS_HOST by default when host is None."""
+    async def test_uses_mainnet_ws_host_by_default(self, client, sample_feed_ids):
+        """Test uses MAINNET_WS_HOST by default."""
         with patch('py_chainlink_streams.client.websockets.connect') as mock_connect:
             mock_ws = AsyncMock(spec=WebSocketClientProtocol)
             create_websocket_mock(mock_connect, mock_ws)
             
-            await connect_websocket(sample_feed_ids, None, 30, 60)
+            await client._connect_websocket(sample_feed_ids)
             
             # Check that URL contains mainnet host
             call_args = mock_connect.call_args
             assert MAINNET_WS_HOST in str(call_args[0][0])
 
     @pytest.mark.asyncio
-    async def test_uses_custom_host_when_provided(self, mock_api_credentials, sample_feed_ids):
-        """Test uses custom host when provided."""
-        custom_host = "custom.ws.host"
+    async def test_uses_config_ping_interval(self, client, sample_feed_ids):
+        """Test uses config ping_interval."""
+        client.config.ping_interval = 45
         with patch('py_chainlink_streams.client.websockets.connect') as mock_connect:
             mock_ws = AsyncMock(spec=WebSocketClientProtocol)
             create_websocket_mock(mock_connect, mock_ws)
             
-            await connect_websocket(sample_feed_ids, custom_host, 30, 60)
+            await client._connect_websocket(sample_feed_ids)
             
             call_args = mock_connect.call_args
-            assert custom_host in str(call_args[0][0])
+            assert call_args.kwargs.get('ping_interval') == 45
 
     @pytest.mark.asyncio
-    async def test_uses_default_ping_interval_when_not_provided(self, mock_api_credentials, sample_feed_ids):
-        """Test uses default ping_interval when not provided."""
+    async def test_uses_config_pong_timeout(self, client, sample_feed_ids):
+        """Test uses config pong_timeout."""
+        client.config.pong_timeout = 90
         with patch('py_chainlink_streams.client.websockets.connect') as mock_connect:
             mock_ws = AsyncMock(spec=WebSocketClientProtocol)
             create_websocket_mock(mock_connect, mock_ws)
             
-            await connect_websocket(sample_feed_ids, None, DEFAULT_PING_INTERVAL, 60)
+            await client._connect_websocket(sample_feed_ids)
             
             call_args = mock_connect.call_args
-            assert call_args.kwargs.get('ping_interval') == DEFAULT_PING_INTERVAL
+            assert call_args.kwargs.get('ping_timeout') == 90
 
     @pytest.mark.asyncio
-    async def test_uses_custom_ping_interval_when_provided(self, mock_api_credentials, sample_feed_ids):
-        """Test uses custom ping_interval when provided."""
-        custom_interval = 45
-        with patch('py_chainlink_streams.client.websockets.connect') as mock_connect:
-            mock_ws = AsyncMock(spec=WebSocketClientProtocol)
-            create_websocket_mock(mock_connect, mock_ws)
-            
-            await connect_websocket(sample_feed_ids, None, custom_interval, 60)
-            
-            call_args = mock_connect.call_args
-            assert call_args.kwargs.get('ping_interval') == custom_interval
-
-    @pytest.mark.asyncio
-    async def test_uses_default_pong_timeout_when_not_provided(self, mock_api_credentials, sample_feed_ids):
-        """Test uses default pong_timeout when not provided."""
-        with patch('py_chainlink_streams.client.websockets.connect') as mock_connect:
-            mock_ws = AsyncMock(spec=WebSocketClientProtocol)
-            create_websocket_mock(mock_connect, mock_ws)
-            
-            await connect_websocket(sample_feed_ids, None, 30, DEFAULT_PONG_TIMEOUT)
-            
-            call_args = mock_connect.call_args
-            assert call_args.kwargs.get('ping_timeout') == DEFAULT_PONG_TIMEOUT
-
-    @pytest.mark.asyncio
-    async def test_uses_custom_pong_timeout_when_provided(self, mock_api_credentials, sample_feed_ids):
-        """Test uses custom pong_timeout when provided."""
-        custom_timeout = 90
-        with patch('py_chainlink_streams.client.websockets.connect') as mock_connect:
-            mock_ws = AsyncMock(spec=WebSocketClientProtocol)
-            create_websocket_mock(mock_connect, mock_ws)
-            
-            await connect_websocket(sample_feed_ids, None, 30, custom_timeout)
-            
-            call_args = mock_connect.call_args
-            assert call_args.kwargs.get('ping_timeout') == custom_timeout
-
-    @pytest.mark.asyncio
-    async def test_builds_correct_websocket_url_with_feed_ids(self, mock_api_credentials, sample_feed_ids):
+    async def test_builds_correct_websocket_url_with_feed_ids(self, client, sample_feed_ids):
         """Test builds correct WebSocket URL with feed IDs."""
         with patch('py_chainlink_streams.client.websockets.connect') as mock_connect:
             mock_ws = AsyncMock(spec=WebSocketClientProtocol)
             create_websocket_mock(mock_connect, mock_ws)
             
-            await connect_websocket(sample_feed_ids, None, 30, 60)
+            await client._connect_websocket(sample_feed_ids)
             
             # Check URL contains feed IDs
             call_args = mock_connect.call_args
@@ -314,13 +281,13 @@ class TestConnectWebsocket:
             assert "/api/v1/ws" in url
 
     @pytest.mark.asyncio
-    async def test_generates_correct_authentication_headers(self, mock_api_credentials, sample_feed_ids):
+    async def test_generates_correct_authentication_headers(self, client, sample_feed_ids):
         """Test generates correct authentication headers."""
         with patch('py_chainlink_streams.client.websockets.connect') as mock_connect:
             mock_ws = AsyncMock(spec=WebSocketClientProtocol)
             create_websocket_mock(mock_connect, mock_ws)
             
-            await connect_websocket(sample_feed_ids, None, 30, 60)
+            await client._connect_websocket(sample_feed_ids)
             
             call_args = mock_connect.call_args
             headers = call_args.kwargs.get('additional_headers', {})
@@ -330,25 +297,25 @@ class TestConnectWebsocket:
             assert headers["Authorization"] == "test-api-key"
 
     @pytest.mark.asyncio
-    async def test_returns_websocket_client_protocol_instance(self, mock_api_credentials, sample_feed_ids):
+    async def test_returns_websocket_client_protocol_instance(self, client, sample_feed_ids):
         """Test returns WebSocketClientProtocol instance."""
         with patch('py_chainlink_streams.client.websockets.connect') as mock_connect:
             mock_ws = AsyncMock(spec=WebSocketClientProtocol)
             create_websocket_mock(mock_connect, mock_ws)
             
-            result = await connect_websocket(sample_feed_ids, None, 30, 60)
+            result = await client._connect_websocket(sample_feed_ids)
             
             assert result == mock_ws
 
     @pytest.mark.asyncio
-    async def test_handles_multiple_feed_ids_correctly(self, mock_api_credentials):
+    async def test_handles_multiple_feed_ids_correctly(self, client):
         """Test handles multiple feed IDs correctly."""
         feed_ids = ["0x123", "0x456", "0x789"]
         with patch('py_chainlink_streams.client.websockets.connect') as mock_connect:
             mock_ws = AsyncMock(spec=WebSocketClientProtocol)
             create_websocket_mock(mock_connect, mock_ws)
             
-            await connect_websocket(feed_ids, None, 30, 60)
+            await client._connect_websocket(feed_ids)
             
             call_args = mock_connect.call_args
             url = call_args[0][0]
@@ -356,20 +323,14 @@ class TestConnectWebsocket:
             assert all(feed_id in url for feed_id in feed_ids)
 
     @pytest.mark.asyncio
-    async def test_raises_appropriate_exception_on_connection_failure(self, mock_api_credentials, sample_feed_ids):
+    async def test_raises_appropriate_exception_on_connection_failure(self, client, sample_feed_ids):
         """Test raises appropriate exception on connection failure."""
         with patch('py_chainlink_streams.client.websockets.connect') as mock_connect:
-            # Create a mock exception - InvalidStatusCode takes status_code and headers
-            # The code tries to re-raise with 3 args, but InvalidStatusCode only takes 2
-            # So it will raise a TypeError. However, the original exception should be raised first.
             original_exception = websockets.exceptions.InvalidStatusCode(401, {})
-            # Make connect raise the exception when awaited
             async def connect_raises(*args, **kwargs):
                 raise original_exception
             mock_connect.side_effect = connect_raises
             
-            # The code will catch and try to re-raise, but will fail with TypeError
-            # because InvalidStatusCode only takes 2 args. So we expect either exception.
             with pytest.raises((websockets.exceptions.InvalidStatusCode, TypeError)):
-                await connect_websocket(sample_feed_ids, None, 30, 60)
+                await client._connect_websocket(sample_feed_ids)
 

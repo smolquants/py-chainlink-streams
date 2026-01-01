@@ -1,182 +1,419 @@
 """
-Chainlink Data Streams API client authentication and connection management.
+ChainlinkClient class for object-oriented API access.
 
-This module provides authentication functions (HMAC-SHA256 signature generation),
-credential management, and WebSocket connection establishment for Chainlink Data Streams API.
+This module provides the ChainlinkClient class that implements a client interface
+similar to the Go SDK's Client, with methods for all Chainlink Data Streams API operations.
 """
 
 import asyncio
-import hmac
-import hashlib
-import os
-import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Callable, Any
+from urllib.parse import urlencode
+import requests
 import websockets
 from websockets.client import WebSocketClientProtocol
 
-from py_chainlink_streams.constants import (
-    MAINNET_WS_HOST,
-    DEFAULT_PING_INTERVAL,
-    DEFAULT_PONG_TIMEOUT,
-)
+from py_chainlink_streams.config import ChainlinkConfig
+from py_chainlink_streams.auth import generate_auth_headers, generate_hmac
+from py_chainlink_streams.report import stream_reports, _ping_loop, ReportResponse, ReportPage
+from py_chainlink_streams.feed import Feed
 
 
-def get_api_credentials() -> Tuple[str, str]:
+class ChainlinkClient:
     """
-    Retrieve and validate API credentials from environment variables.
+    Client for Chainlink Data Streams API.
     
-    Returns:
-        Tuple of (api_key, api_secret)
+    Provides methods for all Chainlink Data Streams operations:
+    - GetFeeds: List all available feeds
+    - GetLatestReport: Fetch latest report for a feed
+    - GetReports: Fetch reports for multiple feeds at a timestamp
+    - GetReportPage: Paginate through reports
+    - Stream: Create real-time report stream
+    - StreamWithStatusCallback: Stream with connection status callbacks
+    
+    Example:
+        ```python
+        import os
+        from py_chainlink_streams import ChainlinkClient, ChainlinkConfig
         
-    Raises:
-        ValueError: If CHAINLINK_STREAMS_API_KEY or CHAINLINK_STREAMS_API_SECRET are not set
-    """
-    api_key = os.getenv("CHAINLINK_STREAMS_API_KEY")
-    api_secret = os.getenv("CHAINLINK_STREAMS_API_SECRET")
-    
-    if not api_key or not api_secret:
-        raise ValueError(
-            "API credentials not set. Please set CHAINLINK_STREAMS_API_KEY and "
-            "CHAINLINK_STREAMS_API_SECRET environment variables"
+        # Create config from environment variables
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
         )
-    
-    return api_key, api_secret
-
-
-def generate_hmac(
-    method: str,
-    path: str,
-    body: bytes,
-    api_key: str,
-    api_secret: str
-) -> Tuple[str, int]:
-    """
-    Generate HMAC-SHA256 signature for Chainlink Data Streams API authentication.
-    
-    Args:
-        method: HTTP method (e.g., "GET", "POST")
-        path: Request path with query parameters (e.g., "/api/v1/reports/latest?feedID=...")
-        body: Request body as bytes (empty bytes for GET requests)
-        api_key: API key from Chainlink
-        api_secret: API secret from Chainlink
         
-    Returns:
-        Tuple of (signature_hex_string, timestamp_milliseconds)
-    """
-    # Generate timestamp (milliseconds since Unix epoch)
-    timestamp = int(time.time() * 1000)
-    
-    # Generate body hash
-    body_hash = hashlib.sha256(body).hexdigest()
-    
-    # Create string to sign
-    string_to_sign = f"{method} {path} {body_hash} {api_key} {timestamp}"
-    
-    # Generate HMAC-SHA256 signature
-    signature = hmac.new(
-        api_secret.encode('utf-8'),
-        string_to_sign.encode('utf-8'),
-        hashlib.sha256
-    ).hexdigest()
-    
-    return signature, timestamp
-
-
-def generate_auth_headers(
-    method: str,
-    path_with_params: str,
-    api_key: str,
-    api_secret: str,
-    body: bytes = b""
-) -> Dict[str, str]:
-    """
-    Generate HTTP headers with Chainlink Data Streams authentication.
-    
-    Args:
-        method: HTTP method (e.g., "GET", "POST")
-        path_with_params: Request path with query parameters
-        api_key: API key from Chainlink
-        api_secret: API secret from Chainlink
-        body: Request body as bytes (default: empty)
+        # Create client
+        client = ChainlinkClient(config)
         
-    Returns:
-        Dictionary of HTTP headers for authentication
-    """
-    signature, timestamp = generate_hmac(method, path_with_params, body, api_key, api_secret)
-    
-    headers = {
-        "Authorization": api_key,
-        "X-Authorization-Timestamp": str(timestamp),
-        "X-Authorization-Signature-SHA256": signature
-    }
-    
-    return headers
-
-
-async def connect_websocket(
-    feed_ids: List[str],
-    host: Optional[str] = None,
-    ping_interval: int = DEFAULT_PING_INTERVAL,
-    pong_timeout: int = DEFAULT_PONG_TIMEOUT
-) -> WebSocketClientProtocol:
-    """
-    Establish an authenticated WebSocket connection to Chainlink Data Streams.
-    
-    Args:
-        feed_ids: List of feed IDs to subscribe to
-        host: WebSocket host (default: MAINNET_WS_HOST)
-        ping_interval: Seconds between ping messages (default: 30)
-        pong_timeout: Seconds to wait for pong before timeout (default: 60)
+        # Get all feeds
+        feeds = client.get_feeds()
         
-    Returns:
-        WebSocket connection object
-        
-    Raises:
-        ValueError: If API credentials are not set or feed_ids is empty
-        websockets.exceptions.InvalidStatusCode: If WebSocket connection fails
+        # Get latest report
+        report = client.get_latest_report("0x0003...")
+        ```
     """
-    # Get API credentials
-    api_key, api_secret = get_api_credentials()
     
-    # Validate feed IDs
-    if not feed_ids:
-        raise ValueError("No feed ID(s) provided")
+    def __init__(self, config: ChainlinkConfig):
+        """
+        Initialize ChainlinkClient with configuration.
+        
+        Args:
+            config: ChainlinkConfig instance with API credentials and settings
+        """
+        if not config.api_key or not config.api_secret:
+            raise ValueError("api_key and api_secret are required")
+        
+        self.config = config
+        
+        # Create requests session with timeout
+        self._session = requests.Session()
+        self._session.timeout = config.timeout
     
-    # Use mainnet host by default
-    if host is None:
-        host = MAINNET_WS_HOST
-    
-    # Build query string
-    query_string = f"feedIDs={','.join(feed_ids)}"
-    path = "/api/v1/ws"
-    full_path = f"{path}?{query_string}"
-    
-    # Generate authentication signature and timestamp
-    signature, timestamp = generate_hmac("GET", full_path, b"", api_key, api_secret)
-    
-    # Create HTTP headers for WebSocket connection
-    headers = {
-        "Authorization": api_key,
-        "X-Authorization-Timestamp": str(timestamp),
-        "X-Authorization-Signature-SHA256": signature
-    }
-    
-    # Create WebSocket URL
-    ws_url = f"wss://{host}{full_path}"
-    
-    # Connect to WebSocket server
-    try:
-        websocket = await websockets.connect(
-            ws_url,
-            additional_headers=headers,
-            ping_interval=ping_interval,
-            ping_timeout=pong_timeout
+    async def _connect_websocket(
+        self,
+        feed_ids: List[str],
+        ping_interval: Optional[int] = None,
+        pong_timeout: Optional[int] = None
+    ) -> WebSocketClientProtocol:
+        """
+        Internal method to establish an authenticated WebSocket connection to Chainlink Data Streams.
+        
+        This is an internal method used by the client for streaming. For external use,
+        use the stream() or stream_with_status_callback() methods.
+        
+        Args:
+            feed_ids: List of feed IDs to subscribe to
+            ping_interval: Seconds between ping messages (default: from config)
+            pong_timeout: Seconds to wait for pong before timeout (default: from config)
+            
+        Returns:
+            WebSocket connection object
+            
+        Raises:
+            ValueError: If feed_ids is empty
+            websockets.exceptions.InvalidStatusCode: If WebSocket connection fails
+        """
+        # Validate feed IDs
+        if not feed_ids:
+            raise ValueError("No feed ID(s) provided")
+        
+        # Use config defaults if not provided
+        if ping_interval is None:
+            ping_interval = self.config.ping_interval
+        if pong_timeout is None:
+            pong_timeout = self.config.pong_timeout
+        
+        # Build query string
+        query_string = f"feedIDs={','.join(feed_ids)}"
+        path = "/api/v1/ws"
+        full_path = f"{path}?{query_string}"
+        
+        # Generate authentication signature and timestamp
+        signature, timestamp = generate_hmac(
+            "GET",
+            full_path,
+            b"",
+            self.config.api_key,
+            self.config.api_secret
         )
-        return websocket
-    except websockets.exceptions.InvalidStatusCode as e:
-        raise websockets.exceptions.InvalidStatusCode(
-            e.status_code,
-            e.headers,
-            f"WebSocket connection error (HTTP {e.status_code}): {e}"
+        
+        # Create HTTP headers for WebSocket connection
+        headers = {
+            "Authorization": self.config.api_key,
+            "X-Authorization-Timestamp": str(timestamp),
+            "X-Authorization-Signature-SHA256": signature
+        }
+        
+        # Create WebSocket URL
+        ws_url = f"wss://{self.config.ws_host}{full_path}"
+        
+        # Connect to WebSocket server
+        try:
+            websocket = await websockets.connect(
+                ws_url,
+                additional_headers=headers,
+                ping_interval=ping_interval,
+                ping_timeout=pong_timeout
+            )
+            return websocket
+        except websockets.exceptions.InvalidStatusCode as e:
+            raise websockets.exceptions.InvalidStatusCode(
+                e.status_code,
+                e.headers,
+                f"WebSocket connection error (HTTP {e.status_code}): {e}"
+            )
+    
+    def _make_request(
+        self,
+        method: str,
+        path: str,
+        params: Optional[Dict[str, Any]] = None,
+        body: bytes = b""
+    ) -> Dict[str, Any]:
+        """
+        Make authenticated HTTP request to Chainlink API.
+        
+        Args:
+            method: HTTP method (GET, POST, etc.)
+            path: API path (e.g., "/api/v1/reports/latest")
+            params: Query parameters
+            body: Request body as bytes
+            
+        Returns:
+            JSON response as dictionary
+        """
+        # Build URL
+        url = f"https://{self.config.api_host}{path}"
+        
+        # Build query string for path (needed for signature)
+        path_with_params = path
+        if params:
+            query_string = urlencode(params)
+            path_with_params = f"{path}?{query_string}"
+        
+        # Generate authentication headers
+        headers = generate_auth_headers(
+            method,
+            path_with_params,
+            self.config.api_key,
+            self.config.api_secret,
+            body
         )
+        
+        # Make request
+        response = self._session.request(
+            method,
+            url,
+            params=params,
+            headers=headers,
+            data=body,
+            verify=not self.config.insecure_skip_verify
+        )
+        response.raise_for_status()
+        
+        return response.json()
+    
+    def get_feeds(self) -> List[Feed]:
+        """
+        List all feeds available to this client.
+        
+        Returns:
+            List of Feed objects
+            
+        Raises:
+            requests.RequestException: If HTTP request fails
+        """
+        response = self._make_request("GET", "/api/v1/feeds")
+        
+        # Handle nested structure
+        if "feeds" in response:
+            feeds_data = response["feeds"]
+        else:
+            feeds_data = response
+        
+        if not feeds_data:
+            return []
+        
+        return [Feed(feed_data) for feed_data in feeds_data]
+    
+    def get_latest_report(self, feed_id: str) -> ReportResponse:
+        """
+        Fetch the latest report available for the given feedID.
+        
+        Args:
+            feed_id: Chainlink feed ID (hex string)
+            
+        Returns:
+            ReportResponse object
+            
+        Raises:
+            requests.RequestException: If HTTP request fails
+            ValueError: If response doesn't contain report data
+        """
+        params = {"feedID": feed_id}
+        response = self._make_request("GET", "/api/v1/reports/latest", params=params)
+        
+        # Handle nested structure
+        if "report" in response:
+            report_data = response["report"]
+        else:
+            report_data = response
+        
+        if not report_data:
+            raise ValueError("Response does not contain report data")
+        
+        return ReportResponse.from_dict(report_data)
+    
+    def get_reports(
+        self,
+        feed_ids: List[str],
+        timestamp: int
+    ) -> List[ReportResponse]:
+        """
+        Fetch reports for the given feedIDs at the specified timestamp.
+        
+        Args:
+            feed_ids: List of feed IDs (hex strings)
+            timestamp: Unix timestamp (seconds)
+            
+        Returns:
+            List of ReportResponse objects
+            
+        Raises:
+            requests.RequestException: If HTTP request fails
+        """
+        params = {
+            "feedIDs": ",".join(feed_ids),
+            "timestamp": str(timestamp)
+        }
+        response = self._make_request("GET", "/api/v1/reports", params=params)
+        
+        # Handle nested structure
+        if "reports" in response:
+            reports_data = response["reports"]
+        else:
+            reports_data = response
+        
+        if not reports_data:
+            return []
+        
+        # Handle both flat and nested structures
+        reports = []
+        for r in reports_data:
+            if isinstance(r, dict):
+                # If it already has feedID at top level, use as-is
+                if "feedID" in r:
+                    reports.append(ReportResponse.from_dict(r))
+                # Otherwise wrap it
+                else:
+                    reports.append(ReportResponse.from_dict({"report": r}))
+            else:
+                # Shouldn't happen, but handle gracefully
+                continue
+        
+        return reports
+    
+    def get_report_page(
+        self,
+        feed_id: str,
+        start_timestamp: int
+    ) -> ReportPage:
+        """
+        Paginate reports for the given feedID starting from the specified timestamp.
+        
+        Args:
+            feed_id: Chainlink feed ID (hex string)
+            start_timestamp: Unix timestamp (seconds) to start pagination from
+            
+        Returns:
+            ReportPage object with reports and next_page_timestamp
+            
+        Raises:
+            requests.RequestException: If HTTP request fails
+        """
+        params = {
+            "feedID": feed_id,
+            "startTimestamp": str(start_timestamp)
+        }
+        response = self._make_request("GET", "/api/v1/reports/page", params=params)
+        
+        # Handle nested structure
+        if "reports" in response:
+            reports_data = response["reports"]
+        else:
+            reports_data = response.get("reports", [])
+        
+        reports = []
+        if reports_data:
+            # Handle both flat and nested structures
+            for r in reports_data:
+                if isinstance(r, dict):
+                    # If it already has feedID at top level, use as-is
+                    if "feedID" in r:
+                        reports.append(ReportResponse.from_dict(r))
+                    # Otherwise wrap it
+                    else:
+                        reports.append(ReportResponse.from_dict({"report": r}))
+                else:
+                    # Shouldn't happen, but handle gracefully
+                    continue
+        
+        # Calculate next page timestamp
+        next_page_timestamp = 0
+        if reports:
+            next_page_timestamp = reports[-1].observations_timestamp + 1
+        
+        return ReportPage(reports=reports, next_page_timestamp=next_page_timestamp)
+    
+    async def stream(
+        self,
+        feed_ids: List[str],
+        callback: Callable[[Dict[str, Any]], None]
+    ) -> None:
+        """
+        Create real-time report stream for the given feedIDs.
+        
+        This is a convenience method that calls stream_with_status_callback with no status callback.
+        
+        Args:
+            feed_ids: List of feed IDs to subscribe to
+            callback: Function to process each report (can be async or sync)
+        """
+        await self.stream_with_status_callback(feed_ids, callback, None)
+    
+    async def stream_with_status_callback(
+        self,
+        feed_ids: List[str],
+        callback: Callable[[Dict[str, Any]], None],
+        status_callback: Optional[Callable[[bool, str, str], None]] = None
+    ) -> None:
+        """
+        Create real-time report stream with connection status callbacks.
+        
+        Args:
+            feed_ids: List of feed IDs to subscribe to
+            callback: Function to process each report (can be async or sync)
+            status_callback: Optional function called on connection status changes.
+                           Signature: (is_connected: bool, host: str, origin: str) -> None
+        """
+        stop_event = asyncio.Event()
+        websocket = None
+        ping_task = None
+        
+        try:
+            # Connect to WebSocket
+            websocket = await self._connect_websocket(feed_ids)
+            
+            # Call status callback if provided
+            if status_callback:
+                status_callback(True, self.config.ws_host, "")
+            
+            self.config._log(f"WebSocket connection established for feeds: {feed_ids}")
+            
+            # Start ping loop in background
+            ping_task = asyncio.create_task(
+                _ping_loop(websocket, self.config.ping_interval, stop_event)
+            )
+            
+            # Stream reports
+            await stream_reports(websocket, callback, stop_event)
+            
+        except KeyboardInterrupt:
+            self.config._log("\nInterrupt signal received, closing connection...")
+            stop_event.set()
+        except Exception as e:
+            self.config._log(f"Error in stream: {e}")
+            if status_callback:
+                status_callback(False, self.config.ws_host, "")
+            stop_event.set()
+        finally:
+            if websocket:
+                await websocket.close()
+            if status_callback:
+                status_callback(False, self.config.ws_host, "")
+            if ping_task:
+                ping_task.cancel()
+                try:
+                    await ping_task
+                except asyncio.CancelledError:
+                    pass
 

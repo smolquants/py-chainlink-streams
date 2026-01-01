@@ -1,83 +1,274 @@
 """
-Chainlink Data Streams report fetching and streaming functionality.
+Chainlink Data Streams report classes and streaming functionality.
 
-This module provides high-level functions for fetching and streaming reports
-via both HTTP REST API and WebSocket connections.
-
-Report functions accept a WebSocket connection (from client.connect_websocket)
-or use client authentication functions for HTTP requests.
+This module provides ReportResponse and ReportPage classes with decoding capabilities,
+and internal functions for WebSocket streaming used by ChainlinkClient.
 """
 
 import asyncio
 import json
 from typing import Dict, List, Optional, Callable, Any
-import requests
 import websockets
 from websockets.client import WebSocketClientProtocol
+from eth_abi import decode
+from eth_utils import remove_0x_prefix
 
-from py_chainlink_streams.client import (
-    get_api_credentials,
-    generate_auth_headers,
-    connect_websocket,
-)
 from py_chainlink_streams.constants import (
-    MAINNET_API_HOST,
     DEFAULT_PING_INTERVAL,
     DEFAULT_PONG_TIMEOUT,
 )
 
 
-def fetch_single_report(
-    feed_id: str,
-    host: Optional[str] = None,
-    timeout: int = 30
-) -> Dict[str, Any]:
+class ReportResponse:
     """
-    Fetch the latest report for a specific feed via HTTP REST API.
+    Report response from Chainlink Data Streams API.
     
-    Args:
-        feed_id: Chainlink feed ID (hex string, e.g., "0x000359843a543ee2fe414dc14c7e7920ef10f4372990b79d6361cdc0dd1ba782")
-        host: API host (default: MAINNET_API_HOST)
-        timeout: Request timeout in seconds (default: 30)
-        
-    Returns:
-        Dictionary containing the report data with keys:
-        - feedID: Feed identifier
-        - validFromTimestamp: Timestamp when report becomes valid
-        - observationsTimestamp: Timestamp of observations
-        - fullReport: Full report data (hex encoded)
-        
-    Raises:
-        ValueError: If API credentials are not set
-        requests.RequestException: If HTTP request fails
+    Attributes:
+        feed_id: Feed identifier (hex string)
+        full_report: Full report data (hex encoded string, starts with "0x")
+        valid_from_timestamp: Timestamp when report becomes valid (Unix timestamp)
+        observations_timestamp: Timestamp of observations (Unix timestamp)
     """
-    # Get API credentials
-    api_key, api_secret = get_api_credentials()
     
-    # Use mainnet host by default
-    if host is None:
-        host = MAINNET_API_HOST
+    def __init__(
+        self,
+        feed_id: str,
+        full_report: str,
+        valid_from_timestamp: int,
+        observations_timestamp: int
+    ):
+        self.feed_id = feed_id
+        self.full_report = full_report
+        self.valid_from_timestamp = valid_from_timestamp
+        self.observations_timestamp = observations_timestamp
     
-    # Build URL
-    path = "/api/v1/reports/latest"
-    params = {"feedID": feed_id}
-    url = f"https://{host}{path}"
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ReportResponse":
+        """Create ReportResponse from API response dictionary."""
+        # Handle nested structure (API wraps in 'report' key)
+        if "report" in data:
+            report_data = data["report"]
+        else:
+            report_data = data
+        
+        return cls(
+            feed_id=report_data["feedID"],
+            full_report=report_data["fullReport"],
+            valid_from_timestamp=report_data["validFromTimestamp"],
+            observations_timestamp=report_data["observationsTimestamp"]
+        )
     
-    # Build query string for path (needed for signature)
-    from urllib.parse import urlencode
-    query_string = urlencode(params)
-    path_with_params = f"{path}?{query_string}"
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary format."""
+        return {
+            "feedID": self.feed_id,
+            "fullReport": self.full_report,
+            "validFromTimestamp": self.valid_from_timestamp,
+            "observationsTimestamp": self.observations_timestamp
+        }
     
-    # Generate authentication headers
-    headers = generate_auth_headers("GET", path_with_params, api_key, api_secret)
+    @staticmethod
+    def get_schema_version(feed_id: str) -> int:
+        """
+        Determine the report schema version from the feed ID prefix.
+        
+        Schema versions are determined by the first 4 hex characters after '0x':
+        - 0x0001 = v1
+        - 0x0002 = v2
+        - 0x0003 = v3 (Crypto Streams)
+        - 0x0004 = v4
+        - etc.
+        
+        Args:
+            feed_id: Feed ID hex string (e.g., "0x000359843a543ee2...")
+            
+        Returns:
+            Schema version number (e.g., 3 for v3)
+        """
+        if not feed_id.startswith('0x'):
+            raise ValueError(f"Invalid feed ID format: {feed_id}")
+        
+        # Extract first 4 hex chars (2 bytes) after '0x'
+        prefix = feed_id[2:6]
+        try:
+            version = int(prefix, 16)
+            return version
+        except ValueError:
+            raise ValueError(f"Could not determine schema version from feed ID: {feed_id}")
     
-    # Make request
-    response = requests.get(url, params=params, headers=headers, timeout=timeout)
-    response.raise_for_status()
+    @staticmethod
+    def _decode_report_structure(full_report_hex: str) -> Dict[str, Any]:
+        """
+        Decode the outer report structure from hex-encoded fullReport.
+        
+        Internal method used by decode().
+        """
+        # Remove '0x' prefix if present
+        hex_data = remove_0x_prefix(full_report_hex)
+        report_bytes = bytes.fromhex(hex_data)
+        
+        # Decode the outer structure
+        # ABI encoding: (bytes32[3], bytes, bytes32[], bytes32[], bytes32)
+        types = ['bytes32[3]', 'bytes', 'bytes32[]', 'bytes32[]', 'bytes32']
+        decoded = decode(types, report_bytes)
+        
+        return {
+            'reportContext': decoded[0],  # tuple of 3 bytes32
+            'reportBlob': decoded[1],      # bytes
+            'rawRs': decoded[2],            # list of bytes32
+            'rawSs': decoded[3],            # list of bytes32
+            'rawVs': decoded[4]             # bytes32
+        }
     
-    return response.json()
+    @staticmethod
+    def _decode_v3_report_data(report_blob: bytes) -> Dict[str, Any]:
+        """
+        Decode v3 (Crypto Streams) report data from reportBlob.
+        
+        Internal method used by decode().
+        """
+        # V3 schema types (feedId is first field in reportBlob)
+        types = [
+            'bytes32',  # feedId
+            'uint32',   # validFromTimestamp
+            'uint32',   # observationsTimestamp
+            'uint192',  # nativeFee
+            'uint192',  # linkFee
+            'uint32',   # expiresAt
+            'int192',   # benchmarkPrice
+            'int192',   # bid
+            'int192',   # ask
+        ]
+        
+        decoded = decode(types, report_blob)
+        
+        # Convert feedId bytes32 to hex string
+        feed_id_hex = '0x' + decoded[0].hex()
+        
+        return {
+            'feedId': feed_id_hex,
+            'validFromTimestamp': decoded[1],
+            'observationsTimestamp': decoded[2],
+            'nativeFee': decoded[3],
+            'linkFee': decoded[4],
+            'expiresAt': decoded[5],
+            'benchmarkPrice': decoded[6],
+            'bid': decoded[7],
+            'ask': decoded[8],
+        }
+    
+    def decode(self, schema_version: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Decode the full report from hex format.
+        
+        This method:
+        1. Decodes the outer report structure (reportContext, reportBlob, signatures)
+        2. Determines or uses the provided schema version
+        3. Decodes the reportBlob based on the schema version
+        
+        Args:
+            schema_version: Optional schema version (if not provided, will be determined from feed_id)
+            
+        Returns:
+            Dictionary containing:
+            - reportContext: tuple of 3 bytes32 values
+            - reportBlob: bytes (raw blob)
+            - rawRs, rawSs, rawVs: signature components
+            - data: decoded report data (schema version dependent)
+            - schemaVersion: the schema version used
+            
+        Raises:
+            ValueError: If schema version cannot be determined or is unsupported
+            Exception: If decoding fails
+        """
+        # Determine schema version
+        if schema_version is None:
+            schema_version = self.get_schema_version(self.feed_id)
+        
+        # Decode outer structure
+        report_structure = self._decode_report_structure(self.full_report)
+        
+        # Decode reportBlob based on schema version
+        if schema_version == 3:
+            report_data = self._decode_v3_report_data(report_structure['reportBlob'])
+        else:
+            raise ValueError(f"Schema version {schema_version} is not yet supported. Currently supported: v3")
+        
+        return {
+            **report_structure,
+            'data': report_data,
+            'schemaVersion': schema_version
+        }
+    
+    @staticmethod
+    def convert_fixed_point_to_decimal(value: int, decimals: int = 18) -> float:
+        """
+        Convert a fixed-point integer value to a decimal float.
+        
+        Chainlink Data Streams prices are typically stored as fixed-point integers
+        with 18 decimal places (wei format, similar to Ethereum).
+        
+        Args:
+            value: Fixed-point integer value
+            decimals: Number of decimal places (default: 18)
+            
+        Returns:
+            Decimal float value
+        """
+        return float(value) / (10 ** decimals)
+    
+    def get_decoded_prices(self, decimals: int = 18) -> Dict[str, Any]:
+        """
+        Extract and convert price fields from this report to decimal format.
+        
+        Args:
+            decimals: Number of decimal places for fixed-point conversion (default: 18)
+            
+        Returns:
+            Dictionary with decimal price values and timestamp:
+            - observationsTimestamp: int (Unix timestamp)
+            - benchmarkPrice: float
+            - bid: float
+            - ask: float
+            - midPrice: float (average of bid and ask)
+            
+        Raises:
+            ValueError: If report is not v3 schema or data is missing
+        """
+        decoded = self.decode()
+        
+        if decoded.get('schemaVersion') != 3:
+            raise ValueError("get_decoded_prices only supports v3 schema reports")
+        
+        data = decoded.get('data', {})
+        
+        observations_timestamp = data.get('observationsTimestamp', 0)
+        benchmark_price = self.convert_fixed_point_to_decimal(data.get('benchmarkPrice', 0), decimals)
+        bid = self.convert_fixed_point_to_decimal(data.get('bid', 0), decimals)
+        ask = self.convert_fixed_point_to_decimal(data.get('ask', 0), decimals)
+        mid_price = (bid + ask) / 2.0
+        
+        return {
+            'observationsTimestamp': observations_timestamp,
+            'benchmarkPrice': benchmark_price,
+            'bid': bid,
+            'ask': ask,
+            'midPrice': mid_price,
+        }
 
 
+class ReportPage:
+    """
+    Paginated report response.
+    
+    Attributes:
+        reports: List of ReportResponse objects
+        next_page_timestamp: Timestamp to use for next page (0 if no more pages)
+    """
+    
+    def __init__(self, reports: List[ReportResponse], next_page_timestamp: int = 0):
+        self.reports = reports
+        self.next_page_timestamp = next_page_timestamp
 async def stream_reports(
     websocket: WebSocketClientProtocol,
     callback: Callable[[Dict[str, Any]], None],
@@ -86,11 +277,11 @@ async def stream_reports(
     """
     Continuously read and process reports from a WebSocket connection.
     
+    Internal function used by ChainlinkClient for streaming.
     This function processes reports from an already-established WebSocket connection.
-    Use client.connect_websocket() to create the connection first.
     
     Args:
-        websocket: Active WebSocket connection (from client.connect_websocket)
+        websocket: Active WebSocket connection (from ChainlinkClient._connect_websocket())
         callback: Async or sync function to process each report
                  Should accept a dict with report data
         stop_event: Optional asyncio.Event to signal when to stop streaming
@@ -140,7 +331,7 @@ async def _ping_loop(
     """
     Send periodic ping messages to keep WebSocket connection alive.
     
-    Internal helper function for stream_reports_with_keepalive.
+    Internal helper function used by ChainlinkClient for streaming.
     
     Args:
         websocket: WebSocket connection
@@ -155,57 +346,4 @@ async def _ping_loop(
         except Exception as e:
             print(f"Error sending ping: {e}")
             break
-
-
-async def stream_reports_with_keepalive(
-    feed_ids: List[str],
-    callback: Callable[[Dict[str, Any]], None],
-    host: Optional[str] = None,
-    ping_interval: int = DEFAULT_PING_INTERVAL,
-    pong_timeout: int = DEFAULT_PONG_TIMEOUT
-) -> None:
-    """
-    High-level function to stream reports with automatic keepalive and reconnection.
-    
-    This function handles:
-    - WebSocket connection establishment
-    - Automatic ping/pong keepalive
-    - Message streaming
-    - Graceful shutdown on interrupt
-    
-    Args:
-        feed_ids: List of feed IDs to subscribe to
-        callback: Function to process each report (can be async or sync)
-        host: WebSocket host (default: MAINNET_WS_HOST)
-        ping_interval: Seconds between ping messages (default: 30)
-        pong_timeout: Seconds to wait for pong before timeout (default: 60)
-    """
-    stop_event = asyncio.Event()
-    
-    try:
-        # Connect to WebSocket
-        websocket = await connect_websocket(feed_ids, host, ping_interval, pong_timeout)
-        print(f"WebSocket connection established for feeds: {feed_ids}")
-        
-        # Start ping loop in background
-        ping_task = asyncio.create_task(_ping_loop(websocket, ping_interval, stop_event))
-        
-        # Stream reports
-        await stream_reports(websocket, callback, stop_event)
-        
-    except KeyboardInterrupt:
-        print("\nInterrupt signal received, closing connection...")
-        stop_event.set()
-    except Exception as e:
-        print(f"Error in stream_reports_with_keepalive: {e}")
-        stop_event.set()
-    finally:
-        if 'websocket' in locals():
-            await websocket.close()
-        if 'ping_task' in locals():
-            ping_task.cancel()
-            try:
-                await ping_task
-            except asyncio.CancelledError:
-                pass
 

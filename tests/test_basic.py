@@ -13,14 +13,9 @@ def test_imports():
     print("Testing imports...")
     try:
         from py_chainlink_streams import (
-            fetch_single_report,
-            connect_websocket,
-            stream_reports,
-            stream_reports_with_keepalive,
-            get_schema_version,
-            decode_report_from_response,
-            get_decoded_prices,
-            convert_fixed_point_to_decimal,
+            ChainlinkClient,
+            ChainlinkConfig,
+            ReportResponse,
             MAINNET_API_HOST,
             TESTNET_API_HOST,
             generate_hmac,
@@ -39,9 +34,9 @@ def test_schema_version():
     """Test schema version detection."""
     print("\nTesting schema version detection...")
     try:
-        from py_chainlink_streams import get_schema_version
+        from py_chainlink_streams import ReportResponse
         feed_id = '0x00039d9e45394f473ab1f050a1b963e6b05351e52d71e507509ada0c95ed75b8'
-        version = get_schema_version(feed_id)
+        version = ReportResponse.get_schema_version(feed_id)
         assert version == 3, f"Expected version 3, got {version}"
         print(f"✓ Schema version detection: v{version}")
         return True
@@ -56,9 +51,9 @@ def test_fixed_point_conversion():
     """Test fixed point to decimal conversion."""
     print("\nTesting fixed point conversion...")
     try:
-        from py_chainlink_streams import convert_fixed_point_to_decimal
+        from py_chainlink_streams import ReportResponse
         price = 87656352262094430000000
-        decimal_price = convert_fixed_point_to_decimal(price)
+        decimal_price = ReportResponse.convert_fixed_point_to_decimal(price)
         expected = 87656.35
         assert abs(decimal_price - expected) < 0.01, f"Expected ~{expected}, got {decimal_price}"
         print(f"✓ Fixed point conversion: {price} -> ${decimal_price:.2f}")

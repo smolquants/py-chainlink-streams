@@ -7,27 +7,15 @@ both HTTP REST API and WebSocket connections, including report decoding.
 Based on: https://docs.chain.link/data-streams/reference/data-streams-api/authentication
 """
 
-from py_chainlink_streams.client import (
+from py_chainlink_streams.auth import (
     get_api_credentials,
     generate_hmac,
     generate_auth_headers,
-    connect_websocket,
 )
 
 from py_chainlink_streams.report import (
-    fetch_single_report,
-    stream_reports,
-    stream_reports_with_keepalive,
-)
-
-from py_chainlink_streams.decode import (
-    get_schema_version,
-    decode_report_structure,
-    decode_v3_report_data,
-    decode_report,
-    decode_report_from_response,
-    convert_fixed_point_to_decimal,
-    get_decoded_prices,
+    ReportResponse,
+    ReportPage,
 )
 
 from py_chainlink_streams.constants import (
@@ -39,26 +27,24 @@ from py_chainlink_streams.constants import (
     DEFAULT_PONG_TIMEOUT,
 )
 
-__version__ = "0.1.0"
+from py_chainlink_streams.config import ChainlinkConfig
+from py_chainlink_streams.client import ChainlinkClient
+from py_chainlink_streams.feed import Feed
+
+__version__ = "0.2.0"
 
 __all__ = [
-    # Client functions (authentication)
+    # Client class and config
+    "ChainlinkClient",
+    "ChainlinkConfig",
+    # Data classes
+    "ReportResponse",
+    "ReportPage",
+    "Feed",
+    # Authentication utilities (for advanced use cases)
     "get_api_credentials",
     "generate_hmac",
     "generate_auth_headers",
-    # Report functions
-    "fetch_single_report",
-    "connect_websocket",
-    "stream_reports",
-    "stream_reports_with_keepalive",
-    # Decode functions
-    "get_schema_version",
-    "decode_report_structure",
-    "decode_v3_report_data",
-    "decode_report",
-    "decode_report_from_response",
-    "convert_fixed_point_to_decimal",
-    "get_decoded_prices",
     # Constants
     "TESTNET_API_HOST",
     "TESTNET_WS_HOST",

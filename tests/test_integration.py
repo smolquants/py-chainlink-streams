@@ -16,12 +16,9 @@ import asyncio
 from typing import Optional
 
 from py_chainlink_streams import (
-    fetch_single_report,
-    connect_websocket,
-    stream_reports_with_keepalive,
-    decode_report_from_response,
-    get_decoded_prices,
-    get_schema_version,
+    ChainlinkClient,
+    ChainlinkConfig,
+    ReportResponse,
 )
 
 # Real mainnet feed IDs for testing (v3 schema)
@@ -56,63 +53,59 @@ def mainnet_feed_ids():
 # ============================================================================
 
 class TestFetchSingleReportMainnet:
-    """Integration tests for fetch_single_report with mainnet API."""
+    """Integration tests for ChainlinkClient.get_latest_report with mainnet API."""
 
     def test_fetch_single_report_mainnet(self, mainnet_feed_id):
         """Test fetching latest report from mainnet API."""
-        response = fetch_single_report(mainnet_feed_id)
-        
-        # API response wraps data in 'report' key
-        assert "report" in response, "Response should contain 'report' key"
-        report = response["report"]
+        import os
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        report = client.get_latest_report(mainnet_feed_id)
         
         # Verify response structure
-        assert "feedID" in report
-        assert "validFromTimestamp" in report
-        assert "observationsTimestamp" in report
-        assert "fullReport" in report
-        
-        # Verify feed ID matches
-        assert report["feedID"] == mainnet_feed_id
+        assert report.feed_id == mainnet_feed_id
+        assert isinstance(report.valid_from_timestamp, int)
+        assert isinstance(report.observations_timestamp, int)
+        assert isinstance(report.full_report, str)
         
         # Verify fullReport is valid hex string
-        full_report = report["fullReport"]
-        assert isinstance(full_report, str)
-        assert full_report.startswith("0x")
-        assert len(full_report) > 100  # Should be substantial hex string
+        assert report.full_report.startswith("0x")
+        assert len(report.full_report) > 100  # Should be substantial hex string
         
         # Verify timestamps are valid Unix timestamps
-        assert isinstance(report["validFromTimestamp"], int)
-        assert isinstance(report["observationsTimestamp"], int)
-        assert report["validFromTimestamp"] > 0
-        assert report["observationsTimestamp"] > 0
+        assert report.valid_from_timestamp > 0
+        assert report.observations_timestamp > 0
 
     def test_fetch_single_report_with_real_feed_id(self, mainnet_feed_id):
         """Test fetching report with real mainnet feed ID."""
-        response = fetch_single_report(mainnet_feed_id)
-        
-        # API response wraps data in 'report' key
-        assert "report" in response, "Response should contain 'report' key"
-        report = response["report"]
+        import os
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        report = client.get_latest_report(mainnet_feed_id)
         
         # Verify response structure matches API spec
-        required_keys = ["feedID", "validFromTimestamp", "observationsTimestamp", "fullReport"]
-        for key in required_keys:
-            assert key in report, f"Missing required key: {key}"
+        assert report.feed_id == mainnet_feed_id
+        assert isinstance(report.valid_from_timestamp, int)
+        assert isinstance(report.observations_timestamp, int)
+        assert isinstance(report.full_report, str)
         
         # Verify fullReport is valid hex string
-        full_report = report["fullReport"]
-        assert full_report.startswith("0x"), "fullReport should start with 0x"
+        assert report.full_report.startswith("0x"), "fullReport should start with 0x"
         # Remove 0x and verify it's valid hex
-        hex_part = full_report[2:]
+        hex_part = report.full_report[2:]
         assert all(c in '0123456789abcdefABCDEF' for c in hex_part), "fullReport should be valid hex"
         
         # Verify timestamps are recent (within last hour)
         import time
         current_time = int(time.time())
-        obs_timestamp = report["observationsTimestamp"]
         # Allow some flexibility (within last 2 hours to account for API delays)
-        assert obs_timestamp > current_time - 7200, "observationsTimestamp should be recent"
+        assert report.observations_timestamp > current_time - 7200, "observationsTimestamp should be recent"
 
     def test_fetch_single_report_handles_invalid_feed_id(self):
         """Test that invalid feed ID is handled gracefully."""
@@ -120,7 +113,13 @@ class TestFetchSingleReportMainnet:
         
         # Should either return error response or raise exception
         try:
-            response = fetch_single_report(invalid_feed_id)
+            import os
+            config = ChainlinkConfig(
+                api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+                api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+            )
+            client = ChainlinkClient(config)
+            report = client.get_latest_report(invalid_feed_id)
             # If it returns, might be empty or error response
             # This is acceptable behavior
         except Exception as e:
@@ -138,13 +137,16 @@ class TestDecodeRealMainnetReport:
     def test_decode_real_mainnet_report(self, mainnet_feed_id):
         """Test decoding a real report fetched from mainnet."""
         # Fetch real report
-        response = fetch_single_report(mainnet_feed_id)
-        
-        # API response wraps data in 'report' key
-        report = response["report"]
+        import os
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        report = client.get_latest_report(mainnet_feed_id)
         
         # Decode the report
-        decoded = decode_report_from_response(report)
+        decoded = report.decode()
         
         # Verify decoded structure
         assert "reportContext" in decoded
@@ -157,7 +159,7 @@ class TestDecodeRealMainnetReport:
         
         # Verify schema version matches feed ID
         schema_version = decoded["schemaVersion"]
-        expected_version = get_schema_version(mainnet_feed_id)
+        expected_version = ReportResponse.get_schema_version(mainnet_feed_id)
         assert schema_version == expected_version, f"Schema version {schema_version} should match feed ID version {expected_version}"
         
         # Verify decoded data contains v3 schema fields
@@ -183,13 +185,17 @@ class TestDecodeRealMainnetReport:
     def test_get_decoded_prices_from_real_report(self, mainnet_feed_id):
         """Test extracting prices from a real mainnet report."""
         # Fetch and decode real report
-        response = fetch_single_report(mainnet_feed_id)
-        # API response wraps data in 'report' key
-        report = response["report"]
-        decoded = decode_report_from_response(report)
+        import os
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        report = client.get_latest_report(mainnet_feed_id)
+        decoded = report.decode()
         
         # Get decoded prices
-        prices = get_decoded_prices(decoded)
+        prices = report.get_decoded_prices()
         
         # Verify price structure
         assert "observationsTimestamp" in prices
@@ -221,18 +227,23 @@ class TestDecodeRealMainnetReport:
     def test_end_to_end_fetch_and_decode(self, mainnet_feed_id):
         """Test complete workflow: fetch → decode → get prices."""
         # Step 1: Fetch report
-        response = fetch_single_report(mainnet_feed_id)
-        assert "report" in response
-        report = response["report"]
-        assert "fullReport" in report
+        import os
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        report = client.get_latest_report(mainnet_feed_id)
+        assert report.feed_id == mainnet_feed_id
+        assert report.full_report.startswith("0x")
         
         # Step 2: Decode report
-        decoded = decode_report_from_response(report)
+        decoded = report.decode()
         assert "data" in decoded
         assert decoded["schemaVersion"] == 3
         
         # Step 3: Get decoded prices
-        prices = get_decoded_prices(decoded)
+        prices = report.get_decoded_prices()
         assert "benchmarkPrice" in prices
         assert "bid" in prices
         assert "ask" in prices
@@ -256,7 +267,13 @@ class TestConnectWebsocketMainnet:
     @pytest.mark.asyncio
     async def test_connect_websocket_mainnet(self, mainnet_feed_ids):
         """Test successfully establishing WebSocket connection to mainnet."""
-        websocket = await connect_websocket(mainnet_feed_ids, None, 30, 60)
+        import os
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        websocket = await client._connect_websocket(mainnet_feed_ids)
         
         # Verify connection is established
         assert websocket is not None
@@ -285,7 +302,13 @@ class TestConnectWebsocketMainnet:
         # Use same feed ID twice to test multiple feeds (or add another feed ID)
         feed_ids = mainnet_feed_ids * 2  # Subscribe to same feed twice
         
-        websocket = await connect_websocket(feed_ids, None, 30, 60)
+        import os
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        websocket = await client._connect_websocket(feed_ids)
         
         # Verify connection is established
         assert websocket is not None
@@ -312,6 +335,7 @@ class TestStreamReportsMainnet:
     @pytest.mark.asyncio
     async def test_stream_reports_receives_messages(self, mainnet_feed_ids):
         """Test that streaming receives at least one report message."""
+        import os
         messages_received = []
         
         def callback(report_data):
@@ -320,10 +344,16 @@ class TestStreamReportsMainnet:
         # Stream for up to 30 seconds or until we get a message
         stop_event = asyncio.Event()
         
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        
         async def stream_with_timeout():
             try:
                 await asyncio.wait_for(
-                    stream_reports_with_keepalive(mainnet_feed_ids, callback),
+                    client.stream(mainnet_feed_ids, callback),
                     timeout=30.0
                 )
             except asyncio.TimeoutError:
@@ -367,6 +397,7 @@ class TestStreamReportsMainnet:
     @pytest.mark.asyncio
     async def test_stream_reports_with_keepalive_mainnet(self, mainnet_feed_ids):
         """Test streaming with keepalive on mainnet."""
+        import os
         messages_received = []
         
         def callback(report_data):
@@ -374,9 +405,14 @@ class TestStreamReportsMainnet:
             print(f"Received report: feedID={report_data.get('feedID', 'unknown')}")
         
         # Stream for a short period to test keepalive
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
         try:
             await asyncio.wait_for(
-                stream_reports_with_keepalive(mainnet_feed_ids, callback),
+                client.stream(mainnet_feed_ids, callback),
                 timeout=10.0  # Stream for 10 seconds
             )
         except asyncio.TimeoutError:
@@ -400,7 +436,13 @@ class TestStreamReportsMainnet:
         
         # Create a custom streaming function that respects stop_event
         async def stream_with_stop():
-            websocket = await connect_websocket(mainnet_feed_ids, None, 30, 60)
+            import os
+            config = ChainlinkConfig(
+                api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+                api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+            )
+            client = ChainlinkClient(config)
+            websocket = await client._connect_websocket(mainnet_feed_ids)
             try:
                 from py_chainlink_streams.report import stream_reports
                 await stream_reports(websocket, callback, stop_event)
@@ -425,6 +467,7 @@ class TestErrorHandlingMainnet:
 
     def test_invalid_credentials_error(self):
         """Test that invalid credentials return appropriate error."""
+        import os
         # Temporarily set invalid credentials
         original_key = os.environ.get("CHAINLINK_STREAMS_API_KEY")
         original_secret = os.environ.get("CHAINLINK_STREAMS_API_SECRET")
@@ -434,8 +477,13 @@ class TestErrorHandlingMainnet:
             os.environ["CHAINLINK_STREAMS_API_SECRET"] = "invalid_secret"
             
             # Should raise error
+            config = ChainlinkConfig(
+                api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+                api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+            )
+            client = ChainlinkClient(config)
             with pytest.raises(Exception) as exc_info:
-                fetch_single_report(BTC_USD_FEED_ID)
+                client.get_latest_report(BTC_USD_FEED_ID)
             
             # Error should indicate authentication failure
             error_str = str(exc_info.value).lower()
@@ -454,7 +502,13 @@ class TestErrorHandlingMainnet:
         
         # Should either return error or raise exception
         try:
-            response = fetch_single_report(invalid_feed_id)
+            import os
+            config = ChainlinkConfig(
+                api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+                api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+            )
+            client = ChainlinkClient(config)
+            report = client.get_latest_report(invalid_feed_id)
             # If response is returned, it might be an error response
             # This is acceptable
         except Exception as e:
@@ -473,9 +527,15 @@ class TestPerformanceMainnet:
     def test_concurrent_fetch_requests(self, mainnet_feed_id):
         """Test making multiple concurrent fetch requests."""
         import concurrent.futures
+        import os
         
         def fetch_report():
-            return fetch_single_report(mainnet_feed_id)
+            config = ChainlinkConfig(
+                api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+                api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+            )
+            client = ChainlinkClient(config)
+            return client.get_latest_report(mainnet_feed_id)
         
         # Make 3 concurrent requests
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
@@ -484,16 +544,14 @@ class TestPerformanceMainnet:
         
         # All requests should complete successfully
         assert len(results) == 3
-        for result in results:
-            # API response wraps data in 'report' key
-            assert "report" in result
-            report = result["report"]
-            assert "feedID" in report
-            assert "fullReport" in report
+        for report in results:
+            assert report.feed_id == mainnet_feed_id
+            assert report.full_report.startswith("0x")
 
     @pytest.mark.asyncio
     async def test_long_running_stream(self, mainnet_feed_ids):
         """Test streaming for extended period to verify stability."""
+        import os
         messages_received = []
         
         def callback(report_data):
@@ -506,9 +564,14 @@ class TestPerformanceMainnet:
             print(f"Message {len(messages_received)}: feedID={feed_id}")
         
         # Stream for 60 seconds to test stability
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
         try:
             await asyncio.wait_for(
-                stream_reports_with_keepalive(mainnet_feed_ids, callback),
+                client.stream(mainnet_feed_ids, callback),
                 timeout=60.0
             )
         except asyncio.TimeoutError:
