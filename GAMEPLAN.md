@@ -17,7 +17,7 @@ This document outlines the roadmap to make `py-chainlink-streams` a production-r
 - **Authentication** - HMAC-SHA256 signature generation
 - **Mainnet & Testnet** - Support for both environments
 - **Comprehensive test suite** (166+ tests):
-  - 141+ unit tests with 90%+ coverage
+  - 141+ unit tests with 87% coverage
   - 25+ integration tests with real mainnet API (single and multiple feed IDs)
   - All modules fully tested with class-based test organization
 - **Documentation**:
@@ -219,7 +219,7 @@ This document outlines the roadmap to make `py-chainlink-streams` a production-r
   - End-to-end workflows (3 tests)
   - Error handling (2 tests)
   - Performance tests (2 tests)
-- ✅ Test coverage: 90%+ (excluding integration tests)
+- ✅ Test coverage: 87% (87.13% as measured by coverage.py, excluding integration tests)
 - [ ] CI/CD setup (GitHub Actions) - **TODO**
 
 **Total Tests:** 143+ tests
@@ -307,7 +307,7 @@ This document outlines the roadmap to make `py-chainlink-streams` a production-r
 
 ### Minimum Viable Product (MVP)
 - ✅ All current functionality working
-- ✅ 90%+ test coverage (143+ tests)
+- ✅ 87% test coverage (87.13% as measured by coverage.py, 141+ unit tests)
 - ✅ Comprehensive documentation
 - ✅ Configuration management (v0.2.0)
 - ✅ `get_feeds()` and `get_report()` methods (v0.2.0)

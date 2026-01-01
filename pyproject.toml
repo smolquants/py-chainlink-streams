@@ -4,11 +4,29 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "py-chainlink-streams"
-version = "0.3.0"
+version = "0.3.1"
 description = "Unofficial lightweight Python SDK for Chainlink Data Streams API"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
+keywords = ["chainlink", "data-streams", "blockchain", "oracle", "crypto", "defi", "websocket", "api-client"]
+authors = [
+    {name = "smolquants", email = "smolquants@example.com"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Internet :: WWW/HTTP :: Dynamic Content",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
 dependencies = [
     "eth-abi>=4.0.0",
     "eth-utils>=2.0.0",
@@ -16,12 +34,19 @@ dependencies = [
     "websockets>=12.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/smolquants/py-chainlink-streams"
+Repository = "https://github.com/smolquants/py-chainlink-streams"
+Issues = "https://github.com/smolquants/py-chainlink-streams/issues"
+Documentation = "https://github.com/smolquants/py-chainlink-streams#readme"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.0.0",
     "pytest-mock>=3.10.0",
+    "coverage>=7.0.0",
 ]
 
 [tool.setuptools]
@@ -35,3 +60,33 @@ markers = [
     "integration: marks tests as integration tests (requires network and API credentials)",
 ]
 asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.coverage.run]
+source = ["src/py_chainlink_streams"]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__init__.py",
+]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
+show_missing = true
+skip_covered = false
+precision = 2
+
+[tool.coverage.html]
+directory = "htmlcov"

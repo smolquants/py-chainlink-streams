@@ -17,3 +17,12 @@ wheels/
 
 # uv
 uv.lock
+
+# Coverage reports
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+*.cover
+.hypothesis/
+.pytest_cache/

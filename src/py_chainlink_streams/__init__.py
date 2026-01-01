@@ -31,7 +31,7 @@ from py_chainlink_streams.config import ChainlinkConfig
 from py_chainlink_streams.client import ChainlinkClient
 from py_chainlink_streams.feed import Feed
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 __all__ = [
     # Client class and config

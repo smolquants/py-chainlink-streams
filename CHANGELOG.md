@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2025-XX-XX
+
+### Added
+
+- **PyPI publication readiness**: Added comprehensive PyPI metadata including:
+  - Python version classifiers (3.9, 3.10, 3.11, 3.12, 3.13)
+  - Keywords for discoverability
+  - Project URLs (homepage, repository, issues, documentation)
+  - Development status and topic classifiers
+- **Code coverage tooling**: Added `coverage>=7.0.0` as a dev dependency
+- **Coverage configuration**: Added comprehensive `[tool.coverage]` configuration in `pyproject.toml`
+- **Professional badges**: Added badges to README for Python version support, license, PyPI version, and test coverage
+- **Python version support documentation**: Added explicit section documenting supported Python versions (3.9+)
+- **Enhanced testing documentation**: Added detailed code coverage reporting instructions
+
+### Changed
+
+- **README improvements**: Enhanced testing section with Python version support and code coverage details
+- **Project metadata**: Professionalized `pyproject.toml` with proper PyPI classifiers and metadata
+
 ## [0.3.0] - 2025-XX-XX
 
 ### Breaking Changes

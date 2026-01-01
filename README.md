@@ -1,5 +1,10 @@
 # py-chainlink-streams
 
+[![Python Version](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![PyPI Version](https://img.shields.io/pypi/v/py-chainlink-streams)](https://pypi.org/project/py-chainlink-streams/)
+[![Test Coverage](https://img.shields.io/badge/coverage-87%25-brightgreen)](https://github.com/smolquants/py-chainlink-streams)
+
 > **⚠️ Unofficial Client**: This is an **unofficial** Python SDK for Chainlink Data Streams API. It is not maintained or endorsed by Chainlink Labs or the Chainlink Foundation. Use at your own risk.
 
 > **🤖 AI Implementation**: This Python SDK, including all code, tests, and documentation, was implemented by **Cursor** using the **Auto** agent router. The implementation was generated through AI-assisted development using various language models and has not been manually written by human developers.
@@ -332,9 +337,18 @@ Main client class for Chainlink Data Streams API (similar to Go SDK's Client int
 - `TESTNET_API_HOST` - Testnet API host
 - `TESTNET_WS_HOST` - Testnet WebSocket host
 
+## Python Version Support
+
+This SDK supports Python **3.9, 3.10, 3.11, 3.12, and 3.13**.
+
+```bash
+# Check your Python version
+python3 --version  # Should be 3.9 or higher
+```
+
 ## Testing
 
-The SDK includes comprehensive unit tests with **90%+ code coverage**.
+The SDK includes comprehensive unit tests with **87% code coverage**.
 
 ### Test Coverage
 
@@ -345,6 +359,39 @@ The SDK includes comprehensive unit tests with **90%+ code coverage**.
 - ✅ Mocked network tests for HTTP and WebSocket operations
 - ✅ Real API integration tests with Chainlink mainnet (BTC/USD and ETH/USD feeds)
 - ✅ Error handling and edge cases covered
+- ✅ **87% code coverage** (87.13% as measured by coverage.py, excluding integration tests)
+
+### Code Coverage
+
+Generate a detailed coverage report:
+
+```bash
+# Install dev dependencies (includes coverage tools)
+uv sync --extra dev
+
+# Option 1: Generate .coverage file and HTML report (recommended)
+pytest --cov=src/py_chainlink_streams --cov-report=html --cov-report=term-missing tests/
+
+# This creates:
+# - .coverage file (binary coverage data)
+# - htmlcov/ directory (HTML report)
+
+# Option 2: Generate .coverage file only
+pytest --cov=src/py_chainlink_streams tests/
+
+# Option 3: Using coverage run directly
+coverage run --source=src/py_chainlink_streams -m pytest tests/
+
+# After generating .coverage, you can generate reports:
+coverage report          # Terminal report
+coverage html            # HTML report (creates htmlcov/)
+coverage xml             # XML report (for CI/CD)
+
+# View HTML coverage report
+open htmlcov/index.html  # macOS
+# or
+xdg-open htmlcov/index.html  # Linux
+```
 
 ### Running Tests
 
@@ -356,7 +403,7 @@ uv sync --extra dev
 pytest tests/
 
 # Run with coverage report
-pytest --cov=py_chainlink_streams --cov-report=html tests/
+pytest --cov=src/py_chainlink_streams --cov-report=html --cov-report=term-missing tests/
 
 # Run specific test file
 pytest tests/test_client.py
