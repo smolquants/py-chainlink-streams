@@ -19,10 +19,12 @@ from py_chainlink_streams import (
     ChainlinkClient,
     ChainlinkConfig,
     ReportResponse,
+    ReportPage,
 )
 
 # Real mainnet feed IDs for testing (v3 schema)
 BTC_USD_FEED_ID = "0x00039d9e45394f473ab1f050a1b963e6b05351e52d71e507509ada0c95ed75b8"
+ETH_USD_FEED_ID = "0x000362205e10b3a147d02792eccee483dca6c7b44ecce7012cb8c6e0b68b3ae9"
 
 # Skip all integration tests if credentials not available
 # Also mark all tests in this file as integration tests
@@ -43,9 +45,15 @@ def mainnet_feed_id():
 
 
 @pytest.fixture
-def mainnet_feed_ids():
-    """List of real mainnet feed IDs for testing."""
+def mainnet_feed_ids_single():
+    """Single mainnet feed ID for testing (list with len 1)."""
     return [BTC_USD_FEED_ID]
+
+
+@pytest.fixture
+def mainnet_feed_ids_multiple():
+    """Multiple mainnet feed IDs for testing (list with len > 1)."""
+    return [BTC_USD_FEED_ID, ETH_USD_FEED_ID]
 
 
 # ============================================================================
@@ -258,25 +266,210 @@ class TestDecodeRealMainnetReport:
 
 
 # ============================================================================
+# Historical Report Integration Tests
+# ============================================================================
+
+class TestGetReportMainnet:
+    """Integration tests for get_report with historical timestamps."""
+
+    def test_get_report_with_historical_timestamp(self, mainnet_feed_id):
+        """Test fetching a report at a specific historical timestamp."""
+        import os
+        import time
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        
+        # Get a recent timestamp (1 hour ago)
+        current_time = int(time.time())
+        historical_timestamp = current_time - 3600
+        
+        # Fetch report at historical timestamp
+        report = client.get_report(mainnet_feed_id, timestamp=historical_timestamp)
+        
+        # Verify report structure
+        assert isinstance(report, ReportResponse)
+        assert report.feed_id == mainnet_feed_id
+        assert report.full_report.startswith("0x")
+        assert report.observations_timestamp > 0
+        assert report.valid_from_timestamp > 0
+        
+        # Verify timestamp is close to requested timestamp (within reasonable range)
+        # The API may return the closest available report
+        time_diff = abs(report.observations_timestamp - historical_timestamp)
+        assert time_diff < 86400, "Report timestamp should be within 24 hours of requested timestamp"
+
+    def test_get_report_can_decode_historical_report(self, mainnet_feed_id):
+        """Test that historical reports can be decoded."""
+        import os
+        import time
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        
+        # Get a recent timestamp (1 hour ago)
+        current_time = int(time.time())
+        historical_timestamp = current_time - 3600
+        
+        # Fetch and decode historical report
+        report = client.get_report(mainnet_feed_id, timestamp=historical_timestamp)
+        decoded = report.decode()
+        
+        # Verify decoded structure
+        assert "schemaVersion" in decoded
+        assert "data" in decoded
+        assert decoded["schemaVersion"] == 3
+        
+        # Verify decoded data
+        data = decoded["data"]
+        assert "feedId" in data
+        assert "observationsTimestamp" in data
+        assert data["feedId"].lower() == mainnet_feed_id.lower()
+
+    def test_get_report_returns_empty_for_future_timestamp(self, mainnet_feed_id):
+        """Test that get_report handles future timestamps gracefully."""
+        import os
+        import time
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        
+        # Use a future timestamp (1 hour from now)
+        current_time = int(time.time())
+        future_timestamp = current_time + 3600
+        
+        # Should either return a report (closest available) or raise an error
+        # The API behavior may vary, so we just check it doesn't crash
+        try:
+            report = client.get_report(mainnet_feed_id, timestamp=future_timestamp)
+            # If it returns, verify it's a valid ReportResponse
+            assert isinstance(report, ReportResponse)
+        except (ValueError, Exception):
+            # If it raises an error, that's also acceptable
+            pass
+
+
+class TestGetReportPageMainnet:
+    """Integration tests for get_report_page with historical timestamps."""
+
+    def test_get_report_page_with_historical_timestamp(self, mainnet_feed_id):
+        """Test fetching a page of reports starting from a historical timestamp."""
+        import os
+        import time
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        
+        # Get a recent timestamp (1 hour ago)
+        current_time = int(time.time())
+        historical_timestamp = current_time - 3600
+        
+        # Fetch report page
+        page = client.get_report_page(mainnet_feed_id, start_timestamp=historical_timestamp)
+        
+        # Verify page structure
+        assert isinstance(page, ReportPage)
+        assert isinstance(page.reports, list)
+        assert isinstance(page.next_page_timestamp, int)
+        
+        # Verify reports in page
+        if len(page.reports) > 0:
+            for report in page.reports:
+                assert isinstance(report, ReportResponse)
+                assert report.feed_id == mainnet_feed_id
+                assert report.full_report.startswith("0x")
+                # Reports should be at or after the start timestamp
+                assert report.observations_timestamp >= historical_timestamp - 3600  # Allow some flexibility
+
+    def test_get_report_page_next_page_timestamp(self, mainnet_feed_id):
+        """Test that next_page_timestamp is set correctly for pagination."""
+        import os
+        import time
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        
+        # Get a recent timestamp (1 hour ago)
+        current_time = int(time.time())
+        historical_timestamp = current_time - 3600
+        
+        # Fetch first page
+        page1 = client.get_report_page(mainnet_feed_id, start_timestamp=historical_timestamp)
+        
+        # Verify next_page_timestamp
+        assert page1.next_page_timestamp >= 0
+        
+        # If there's a next page, fetch it
+        if page1.next_page_timestamp > 0:
+            page2 = client.get_report_page(mainnet_feed_id, start_timestamp=page1.next_page_timestamp)
+            assert isinstance(page2, ReportPage)
+            # Next page timestamp should be greater than or equal to first page's next timestamp
+            assert page2.next_page_timestamp >= page1.next_page_timestamp
+
+    def test_get_report_page_can_decode_reports(self, mainnet_feed_id):
+        """Test that reports in a page can be decoded."""
+        import os
+        import time
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        
+        # Get a recent timestamp (1 hour ago)
+        current_time = int(time.time())
+        historical_timestamp = current_time - 3600
+        
+        # Fetch report page
+        page = client.get_report_page(mainnet_feed_id, start_timestamp=historical_timestamp)
+        
+        # Decode first report if available
+        if len(page.reports) > 0:
+            report = page.reports[0]
+            decoded = report.decode()
+            
+            # Verify decoded structure
+            assert "schemaVersion" in decoded
+            assert "data" in decoded
+            assert decoded["schemaVersion"] == 3
+            
+            # Verify decoded data
+            data = decoded["data"]
+            assert "feedId" in data
+            assert data["feedId"].lower() == mainnet_feed_id.lower()
+
+
+# ============================================================================
 # WebSocket Connection Integration Tests
 # ============================================================================
 
-class TestConnectWebsocketMainnet:
-    """Integration tests for WebSocket connections to mainnet."""
+class TestConnectWebsocketMainnetSingle:
+    """Integration tests for WebSocket connections to mainnet with single feed ID."""
 
     @pytest.mark.asyncio
-    async def test_connect_websocket_mainnet(self, mainnet_feed_ids):
-        """Test successfully establishing WebSocket connection to mainnet."""
+    async def test_connect_websocket_mainnet_single_feed(self, mainnet_feed_ids_single):
+        """Test successfully establishing WebSocket connection to mainnet with single feed ID."""
         import os
         config = ChainlinkConfig(
             api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
             api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
         )
         client = ChainlinkClient(config)
-        websocket = await client._connect_websocket(mainnet_feed_ids)
+        websocket = await client._connect_websocket(mainnet_feed_ids_single)
         
         # Verify connection is established
         assert websocket is not None
+        assert len(mainnet_feed_ids_single) == 1
         
         # Keep connection open for a few seconds to verify stability
         # Try to ping to verify connection is alive
@@ -296,22 +489,24 @@ class TestConnectWebsocketMainnet:
         # Close connection
         await websocket.close()
 
+
+class TestConnectWebsocketMainnetMultiple:
+    """Integration tests for WebSocket connections to mainnet with multiple feed IDs."""
+
     @pytest.mark.asyncio
-    async def test_connect_websocket_with_multiple_feeds(self, mainnet_feed_ids):
-        """Test connecting with multiple feed IDs."""
-        # Use same feed ID twice to test multiple feeds (or add another feed ID)
-        feed_ids = mainnet_feed_ids * 2  # Subscribe to same feed twice
-        
+    async def test_connect_websocket_mainnet_multiple_feeds(self, mainnet_feed_ids_multiple):
+        """Test successfully establishing WebSocket connection to mainnet with multiple feed IDs."""
         import os
         config = ChainlinkConfig(
             api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
             api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
         )
         client = ChainlinkClient(config)
-        websocket = await client._connect_websocket(feed_ids)
+        websocket = await client._connect_websocket(mainnet_feed_ids_multiple)
         
         # Verify connection is established
         assert websocket is not None
+        assert len(mainnet_feed_ids_multiple) > 1
         
         # Verify connection is alive by trying to ping
         try:
@@ -319,9 +514,16 @@ class TestConnectWebsocketMainnet:
         except Exception:
             pytest.fail("WebSocket connection should be alive")
         
-        # Verify connection URL would contain feed IDs (indirectly verified by successful connection)
-        await asyncio.sleep(1)
+        # Keep connection open for a few seconds to verify stability
+        await asyncio.sleep(2)
         
+        # Verify connection is still open by trying another ping
+        try:
+            await websocket.ping()
+        except Exception:
+            pytest.fail("Connection should remain open")
+        
+        # Close connection
         await websocket.close()
 
 
@@ -329,11 +531,11 @@ class TestConnectWebsocketMainnet:
 # WebSocket Streaming Integration Tests
 # ============================================================================
 
-class TestStreamReportsMainnet:
-    """Integration tests for streaming reports from mainnet."""
+class TestStreamReportsMainnetSingle:
+    """Integration tests for streaming reports from mainnet with single feed ID."""
 
     @pytest.mark.asyncio
-    async def test_stream_reports_receives_messages(self, mainnet_feed_ids):
+    async def test_stream_reports_receives_messages_single_feed(self, mainnet_feed_ids_single):
         """Test that streaming receives at least one report message."""
         import os
         messages_received = []
@@ -350,10 +552,12 @@ class TestStreamReportsMainnet:
         )
         client = ChainlinkClient(config)
         
+        assert len(mainnet_feed_ids_single) == 1
+        
         async def stream_with_timeout():
             try:
                 await asyncio.wait_for(
-                    client.stream(mainnet_feed_ids, callback),
+                    client.stream(mainnet_feed_ids_single, callback),
                     timeout=30.0
                 )
             except asyncio.TimeoutError:
@@ -395,8 +599,8 @@ class TestStreamReportsMainnet:
             # This is acceptable - API might not send messages immediately
 
     @pytest.mark.asyncio
-    async def test_stream_reports_with_keepalive_mainnet(self, mainnet_feed_ids):
-        """Test streaming with keepalive on mainnet."""
+    async def test_stream_reports_with_keepalive_mainnet_single_feed(self, mainnet_feed_ids_single):
+        """Test streaming with keepalive on mainnet with single feed ID."""
         import os
         messages_received = []
         
@@ -412,7 +616,113 @@ class TestStreamReportsMainnet:
         client = ChainlinkClient(config)
         try:
             await asyncio.wait_for(
-                client.stream(mainnet_feed_ids, callback),
+                client.stream(mainnet_feed_ids_single, callback),
+                timeout=10.0  # Stream for 10 seconds
+            )
+        except asyncio.TimeoutError:
+            # Timeout is expected - we're testing that keepalive works
+            pass
+        
+        # Verify we could establish connection (no exception means connection worked)
+        # Messages may or may not be received depending on API activity
+
+
+class TestStreamReportsMainnetMultiple:
+    """Integration tests for streaming reports from mainnet with multiple feed IDs."""
+
+    @pytest.mark.asyncio
+    async def test_stream_reports_receives_messages_multiple_feeds(self, mainnet_feed_ids_multiple):
+        """Test that streaming receives at least one report message with multiple feed IDs."""
+        import os
+        messages_received = []
+        
+        def callback(report_data):
+            messages_received.append(report_data)
+        
+        # Stream for up to 30 seconds or until we get a message
+        stop_event = asyncio.Event()
+        
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        
+        assert len(mainnet_feed_ids_multiple) > 1
+        
+        async def stream_with_timeout():
+            try:
+                await asyncio.wait_for(
+                    client.stream(mainnet_feed_ids_multiple, callback),
+                    timeout=30.0
+                )
+            except asyncio.TimeoutError:
+                stop_event.set()
+        
+        # Start streaming
+        stream_task = asyncio.create_task(stream_with_timeout())
+        
+        # Wait for at least one message or timeout
+        await asyncio.sleep(5)  # Give it 5 seconds to receive a message
+        
+        # Check if we received any messages
+        if messages_received:
+            # Got a message, verify it's valid
+            # WebSocket messages may have nested 'report' structure
+            message = messages_received[0]
+            if "report" in message:
+                report = message["report"]
+            else:
+                report = message
+            
+            assert "feedID" in report or "report" in message
+            assert "fullReport" in report or "observationsTimestamp" in report or "report" in message
+            
+            # Verify we can receive reports from different feeds
+            feed_ids_received = set()
+            for msg in messages_received:
+                if "report" in msg:
+                    report = msg["report"]
+                else:
+                    report = msg
+                if "feedID" in report:
+                    feed_ids_received.add(report["feedID"])
+            
+            # Stop streaming
+            stop_event.set()
+            stream_task.cancel()
+            try:
+                await stream_task
+            except asyncio.CancelledError:
+                pass
+        else:
+            # No messages yet, cancel and verify we can cancel gracefully
+            stream_task.cancel()
+            try:
+                await stream_task
+            except asyncio.CancelledError:
+                pass
+            # This is acceptable - API might not send messages immediately
+
+    @pytest.mark.asyncio
+    async def test_stream_reports_with_keepalive_mainnet_multiple_feeds(self, mainnet_feed_ids_multiple):
+        """Test streaming with keepalive on mainnet with multiple feed IDs."""
+        import os
+        messages_received = []
+        
+        def callback(report_data):
+            messages_received.append(report_data)
+            print(f"Received report: feedID={report_data.get('feedID', 'unknown')}")
+        
+        # Stream for a short period to test keepalive
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        try:
+            await asyncio.wait_for(
+                client.stream(mainnet_feed_ids_multiple, callback),
                 timeout=10.0  # Stream for 10 seconds
             )
         except asyncio.TimeoutError:
@@ -423,8 +733,8 @@ class TestStreamReportsMainnet:
         # Messages may or may not be received depending on API activity
 
     @pytest.mark.asyncio
-    async def test_stream_reports_stop_event(self, mainnet_feed_ids):
-        """Test that stop_event properly stops streaming."""
+    async def test_stream_reports_stop_event_multiple_feeds(self, mainnet_feed_ids_multiple):
+        """Test that stop_event properly stops streaming for multiple feeds."""
         messages_received = []
         stop_event = asyncio.Event()
         
@@ -442,10 +752,18 @@ class TestStreamReportsMainnet:
                 api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
             )
             client = ChainlinkClient(config)
-            websocket = await client._connect_websocket(mainnet_feed_ids)
+            websocket = await client._connect_websocket(mainnet_feed_ids_multiple)
             try:
-                from py_chainlink_streams.report import stream_reports
-                await stream_reports(websocket, callback, stop_event)
+                # Stream reports directly from websocket
+                import json
+                async for message in websocket:
+                    try:
+                        report_data = json.loads(message)
+                        callback(report_data)
+                        if stop_event.is_set():
+                            break
+                    except Exception:
+                        continue
             finally:
                 await websocket.close()
         
@@ -549,8 +867,8 @@ class TestPerformanceMainnet:
             assert report.full_report.startswith("0x")
 
     @pytest.mark.asyncio
-    async def test_long_running_stream(self, mainnet_feed_ids):
-        """Test streaming for extended period to verify stability."""
+    async def test_long_running_stream_single_feed(self, mainnet_feed_ids_single):
+        """Test streaming for extended period to verify stability with single feed ID."""
         import os
         messages_received = []
         
@@ -571,7 +889,40 @@ class TestPerformanceMainnet:
         client = ChainlinkClient(config)
         try:
             await asyncio.wait_for(
-                client.stream(mainnet_feed_ids, callback),
+                client.stream(mainnet_feed_ids_single, callback),
+                timeout=60.0
+            )
+        except asyncio.TimeoutError:
+            # Expected - we're testing long-running stability
+            pass
+        
+        # If we got here without crashing, connection was stable
+        # Messages may or may not be received depending on API activity
+
+    @pytest.mark.asyncio
+    async def test_long_running_stream_multiple_feeds(self, mainnet_feed_ids_multiple):
+        """Test streaming for extended period to verify stability with multiple feed IDs."""
+        import os
+        messages_received = []
+        
+        def callback(report_data):
+            messages_received.append(report_data)
+            # Handle nested structure
+            if "report" in report_data:
+                feed_id = report_data["report"].get('feedID', 'unknown')
+            else:
+                feed_id = report_data.get('feedID', 'unknown')
+            print(f"Message {len(messages_received)}: feedID={feed_id}")
+        
+        # Stream for 60 seconds to test stability
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        try:
+            await asyncio.wait_for(
+                client.stream(mainnet_feed_ids_multiple, callback),
                 timeout=60.0
             )
         except asyncio.TimeoutError:

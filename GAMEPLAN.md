@@ -2,24 +2,24 @@
 
 This document outlines the roadmap to make `py-chainlink-streams` a production-ready, lightweight Python SDK for Chainlink Data Streams.
 
-## Current Status (v0.2.0)
+## Current Status (v0.3.0)
 
 ✅ **Completed:**
 - **Class-based API** - `ChainlinkClient` and `ChainlinkConfig` for object-oriented usage
 - **HTTP REST API** - All endpoints implemented:
   - `get_feeds()` - List all available feeds
   - `get_latest_report()` - Fetch latest report for a feed
-  - `get_reports()` - Get reports at a specific timestamp
+  - `get_report()` - Get a report for a feed at a specific timestamp
   - `get_report_page()` - Paginate through reports
 - **WebSocket Streaming** - Real-time streaming with keepalive and status callbacks
 - **Report Decoding** - V3 schema decoding with methods on `ReportResponse` class
 - **Price Conversion** - Fixed-point to decimal conversion utilities
 - **Authentication** - HMAC-SHA256 signature generation
 - **Mainnet & Testnet** - Support for both environments
-- **Comprehensive test suite** (143+ tests):
-  - 123 unit tests with 90%+ coverage
-  - 15+ integration tests with real mainnet API
-  - All modules fully tested
+- **Comprehensive test suite** (166+ tests):
+  - 141+ unit tests with 90%+ coverage
+  - 25+ integration tests with real mainnet API (single and multiple feed IDs)
+  - All modules fully tested with class-based test organization
 - **Documentation**:
   - Complete README with examples
   - API documentation
@@ -33,6 +33,15 @@ This document outlines the roadmap to make `py-chainlink-streams` a production-r
 - Removed all backward-compatibility functions (use `ChainlinkClient` instead)
 - Moved all decode functions to `ReportResponse` and `Feed` classes
 - Removed `from_env()` method (use `os.getenv()` directly)
+
+**Version 0.3.0 Breaking Changes:**
+- Changed `get_reports(feed_ids: List[str])` to `get_report(feed_id: str)` - now accepts single feed ID and returns single ReportResponse
+
+**Version 0.3.0 Improvements:**
+- Refactored test suite to class-based organization (test_auth.py, test_feed.py, test_report.py, test_client.py)
+- Enhanced integration tests with single and multiple feed ID scenarios (BTC/USD and ETH/USD)
+- Inlined WebSocket streaming logic into ChainlinkClient (removed stream_reports and _ping_loop from report.py)
+- Improved test coverage and organization
 
 ## Phase 1: Core Improvements (High Priority)
 
@@ -66,7 +75,7 @@ This document outlines the roadmap to make `py-chainlink-streams` a production-r
 
 **Completed:**
 - ✅ `get_feeds()` - List all available feeds (returns `List[Feed]`)
-- ✅ `get_reports(feed_ids, timestamp)` - Get reports at specific timestamp (returns `List[ReportResponse]`)
+- ✅ `get_report(feed_id, timestamp)` - Get a report for a feed at a specific timestamp (returns `ReportResponse`)
 - ✅ `get_report_page(feed_id, start_timestamp)` - Paginate reports (returns `ReportPage`)
 - All methods implemented in `ChainlinkClient` class
 
@@ -301,7 +310,7 @@ This document outlines the roadmap to make `py-chainlink-streams` a production-r
 - ✅ 90%+ test coverage (143+ tests)
 - ✅ Comprehensive documentation
 - ✅ Configuration management (v0.2.0)
-- ✅ `get_feeds()` and `get_reports()` methods (v0.2.0)
+- ✅ `get_feeds()` and `get_report()` methods (v0.2.0)
 - ✅ `get_report_page()` method (v0.2.0)
 - ✅ WebSocket status callbacks (v0.2.0)
 - [ ] Structured error handling

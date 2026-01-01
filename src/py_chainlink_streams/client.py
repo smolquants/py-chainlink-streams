@@ -6,6 +6,7 @@ similar to the Go SDK's Client, with methods for all Chainlink Data Streams API 
 """
 
 import asyncio
+import json
 from typing import Dict, List, Optional, Callable, Any
 from urllib.parse import urlencode
 import requests
@@ -14,7 +15,7 @@ from websockets.client import WebSocketClientProtocol
 
 from py_chainlink_streams.config import ChainlinkConfig
 from py_chainlink_streams.auth import generate_auth_headers, generate_hmac
-from py_chainlink_streams.report import stream_reports, _ping_loop, ReportResponse, ReportPage
+from py_chainlink_streams.report import ReportResponse, ReportPage
 from py_chainlink_streams.feed import Feed
 
 
@@ -25,7 +26,7 @@ class ChainlinkClient:
     Provides methods for all Chainlink Data Streams operations:
     - GetFeeds: List all available feeds
     - GetLatestReport: Fetch latest report for a feed
-    - GetReports: Fetch reports for multiple feeds at a timestamp
+    - GetReport: Fetch a report for a feed at a specific timestamp
     - GetReportPage: Paginate through reports
     - Stream: Create real-time report stream
     - StreamWithStatusCallback: Stream with connection status callbacks
@@ -188,7 +189,19 @@ class ChainlinkClient:
             data=body,
             verify=not self.config.insecure_skip_verify
         )
-        response.raise_for_status()
+        # Provide better error messages with API response details
+        if not response.ok:
+            try:
+                error_data = response.json()
+                error_msg = error_data.get("error", error_data.get("message", response.text))
+            except:
+                error_msg = response.text
+            error = requests.HTTPError(
+                f"{response.status_code} {response.reason}: {error_msg}",
+                response=response
+            )
+            error.response_text = response.text
+            raise error
         
         return response.json()
     
@@ -243,54 +256,42 @@ class ChainlinkClient:
         
         return ReportResponse.from_dict(report_data)
     
-    def get_reports(
+    def get_report(
         self,
-        feed_ids: List[str],
+        feed_id: str,
         timestamp: int
-    ) -> List[ReportResponse]:
+    ) -> ReportResponse:
         """
-        Fetch reports for the given feedIDs at the specified timestamp.
+        Fetch a report for the given feedID at the specified timestamp.
         
         Args:
-            feed_ids: List of feed IDs (hex strings)
+            feed_id: Feed ID (hex string)
             timestamp: Unix timestamp (seconds)
             
         Returns:
-            List of ReportResponse objects
+            ReportResponse object
             
         Raises:
             requests.RequestException: If HTTP request fails
+            ValueError: If response doesn't contain report data
         """
+        # Use feedID (singular) parameter, matching get_latest_report pattern
         params = {
-            "feedIDs": ",".join(feed_ids),
+            "feedID": feed_id,
             "timestamp": str(timestamp)
         }
         response = self._make_request("GET", "/api/v1/reports", params=params)
         
-        # Handle nested structure
-        if "reports" in response:
-            reports_data = response["reports"]
-        else:
-            reports_data = response
+        # Handle nested structure - API returns {"report": {...}} for single report
+        if "report" in response:
+            report_data = response["report"]
+            if isinstance(report_data, dict):
+                return ReportResponse.from_dict(report_data)
+        elif isinstance(response, dict) and ("feedID" in response or "feedId" in response):
+            # Direct report dict
+            return ReportResponse.from_dict(response)
         
-        if not reports_data:
-            return []
-        
-        # Handle both flat and nested structures
-        reports = []
-        for r in reports_data:
-            if isinstance(r, dict):
-                # If it already has feedID at top level, use as-is
-                if "feedID" in r:
-                    reports.append(ReportResponse.from_dict(r))
-                # Otherwise wrap it
-                else:
-                    reports.append(ReportResponse.from_dict({"report": r}))
-            else:
-                # Shouldn't happen, but handle gracefully
-                continue
-        
-        return reports
+        raise ValueError("Response does not contain report data")
     
     def get_report_page(
         self,
@@ -337,9 +338,12 @@ class ChainlinkClient:
                     # Shouldn't happen, but handle gracefully
                     continue
         
-        # Calculate next page timestamp
+        # Get next page timestamp from API response if available, otherwise calculate from last report
         next_page_timestamp = 0
-        if reports:
+        if "nextPageTimestamp" in response:
+            next_page_timestamp = response["nextPageTimestamp"]
+        elif reports:
+            # Fallback: calculate from last report's observations timestamp
             next_page_timestamp = reports[-1].observations_timestamp + 1
         
         return ReportPage(reports=reports, next_page_timestamp=next_page_timestamp)
@@ -390,12 +394,47 @@ class ChainlinkClient:
             self.config._log(f"WebSocket connection established for feeds: {feed_ids}")
             
             # Start ping loop in background
-            ping_task = asyncio.create_task(
-                _ping_loop(websocket, self.config.ping_interval, stop_event)
-            )
+            async def ping_loop():
+                """Send periodic ping messages to keep WebSocket connection alive."""
+                while not stop_event.is_set():
+                    try:
+                        await asyncio.sleep(self.config.ping_interval)
+                        if not stop_event.is_set():
+                            await websocket.ping()
+                    except Exception as e:
+                        self.config._log(f"Error sending ping: {e}")
+                        break
+            
+            ping_task = asyncio.create_task(ping_loop())
             
             # Stream reports
-            await stream_reports(websocket, callback, stop_event)
+            try:
+                async for message in websocket:
+                    try:
+                        # Parse JSON message
+                        report_data = json.loads(message)
+                        
+                        # Call callback with report data
+                        if asyncio.iscoroutinefunction(callback):
+                            await callback(report_data)
+                        else:
+                            callback(report_data)
+                        
+                        # Check if we should stop
+                        if stop_event and stop_event.is_set():
+                            break
+                            
+                    except json.JSONDecodeError as e:
+                        self.config._log(f"Error parsing message: {e}")
+                        continue
+                    except Exception as e:
+                        self.config._log(f"Error in callback: {e}")
+                        continue
+                        
+            except websockets.exceptions.ConnectionClosed:
+                self.config._log("WebSocket connection closed")
+            except Exception as e:
+                self.config._log(f"WebSocket read error: {e}")
             
         except KeyboardInterrupt:
             self.config._log("\nInterrupt signal received, closing connection...")

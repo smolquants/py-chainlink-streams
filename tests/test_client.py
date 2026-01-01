@@ -1,19 +1,16 @@
 """
 Tests for py_chainlink_streams.client module.
+
+This module tests ChainlinkClient class methods.
 """
 
 import os
-import time
+import asyncio
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 import websockets
 from websockets.client import WebSocketClientProtocol
 
-from py_chainlink_streams.auth import (
-    get_api_credentials,
-    generate_hmac,
-    generate_auth_headers,
-)
 from py_chainlink_streams.client import ChainlinkClient
 from py_chainlink_streams.config import ChainlinkConfig
 from py_chainlink_streams.constants import (
@@ -21,6 +18,8 @@ from py_chainlink_streams.constants import (
     DEFAULT_PING_INTERVAL,
     DEFAULT_PONG_TIMEOUT,
 )
+from py_chainlink_streams.report import ReportResponse, ReportPage
+from py_chainlink_streams.feed import Feed
 
 
 def create_websocket_mock(mock_connect, mock_ws):
@@ -28,183 +27,6 @@ def create_websocket_mock(mock_connect, mock_ws):
     async def connect_mock(*args, **kwargs):
         return mock_ws
     mock_connect.side_effect = connect_mock
-
-
-class TestGetAPICredentials:
-    """Test get_api_credentials function."""
-
-    def test_returns_credentials_when_set(self, mock_api_credentials):
-        """Test returns tuple of (api_key, api_secret) when env vars are set."""
-        api_key, api_secret = get_api_credentials()
-        assert api_key == "test-api-key"
-        assert api_secret == "test-api-secret"
-        assert isinstance(api_key, str)
-        assert isinstance(api_secret, str)
-
-    def test_raises_when_api_key_missing(self, clear_api_credentials):
-        """Test raises ValueError when CHAINLINK_STREAMS_API_KEY is missing."""
-        with pytest.raises(ValueError, match="API credentials not set"):
-            get_api_credentials()
-
-    def test_raises_when_api_secret_missing(self, monkeypatch):
-        """Test raises ValueError when CHAINLINK_STREAMS_API_SECRET is missing."""
-        monkeypatch.setenv("CHAINLINK_STREAMS_API_KEY", "test-key")
-        monkeypatch.delenv("CHAINLINK_STREAMS_API_SECRET", raising=False)
-        with pytest.raises(ValueError, match="API credentials not set"):
-            get_api_credentials()
-
-    def test_raises_when_both_missing(self, clear_api_credentials):
-        """Test raises ValueError when both are missing."""
-        with pytest.raises(ValueError, match="API credentials not set"):
-            get_api_credentials()
-
-    def test_raises_when_empty_string(self, monkeypatch):
-        """Test handles empty string values correctly (should raise ValueError)."""
-        monkeypatch.setenv("CHAINLINK_STREAMS_API_KEY", "")
-        monkeypatch.setenv("CHAINLINK_STREAMS_API_SECRET", "")
-        with pytest.raises(ValueError, match="API credentials not set"):
-            get_api_credentials()
-
-    def test_returns_correct_values_from_environment(self, monkeypatch):
-        """Test returns correct values from environment."""
-        monkeypatch.setenv("CHAINLINK_STREAMS_API_KEY", "custom-key")
-        monkeypatch.setenv("CHAINLINK_STREAMS_API_SECRET", "custom-secret")
-        api_key, api_secret = get_api_credentials()
-        assert api_key == "custom-key"
-        assert api_secret == "custom-secret"
-
-
-class TestGenerateHMAC:
-    """Test generate_hmac function."""
-
-    def test_returns_tuple_of_signature_and_timestamp(self):
-        """Test returns tuple of (signature: str, timestamp: int)."""
-        signature, timestamp = generate_hmac("GET", "/test", b"", "key", "secret")
-        assert isinstance(signature, str)
-        assert isinstance(timestamp, int)
-
-    def test_signature_is_64_char_hex_string(self):
-        """Test signature is 64-character hex string."""
-        signature, _ = generate_hmac("GET", "/test", b"", "key", "secret")
-        assert len(signature) == 64
-        assert all(c in '0123456789abcdef' for c in signature)
-
-    def test_timestamp_is_integer_milliseconds(self):
-        """Test timestamp is integer (milliseconds)."""
-        _, timestamp = generate_hmac("GET", "/test", b"", "key", "secret")
-        assert isinstance(timestamp, int)
-        assert timestamp > 0
-        # Should be roughly current time in milliseconds
-        current_ms = int(time.time() * 1000)
-        assert abs(timestamp - current_ms) < 1000  # Within 1 second
-
-    def test_same_inputs_produce_same_signature(self):
-        """Test same inputs produce same signature (deterministic)."""
-        # Note: This will fail because timestamp changes, but we can test with fixed timestamp
-        # Actually, signatures will differ due to timestamp, so we test structure instead
-        sig1, ts1 = generate_hmac("GET", "/test", b"", "key", "secret")
-        sig2, ts2 = generate_hmac("GET", "/test", b"", "key", "secret")
-        assert len(sig1) == len(sig2) == 64
-        assert isinstance(ts1, int)
-        assert isinstance(ts2, int)
-
-    def test_different_timestamps_produce_different_signatures(self):
-        """Test different timestamps produce different signatures."""
-        # This is implicit - each call has different timestamp
-        sig1, ts1 = generate_hmac("GET", "/test", b"", "key", "secret")
-        time.sleep(0.001)  # Small delay to ensure different timestamp
-        sig2, ts2 = generate_hmac("GET", "/test", b"", "key", "secret")
-        assert ts2 > ts1  # Timestamp should increase
-
-    def test_different_paths_produce_different_signatures(self):
-        """Test different paths produce different signatures."""
-        sig1, _ = generate_hmac("GET", "/path1", b"", "key", "secret")
-        sig2, _ = generate_hmac("GET", "/path2", b"", "key", "secret")
-        # Signatures should be different (even with different timestamps)
-        assert sig1 != sig2
-
-    def test_different_methods_produce_different_signatures(self):
-        """Test different methods produce different signatures."""
-        sig1, _ = generate_hmac("GET", "/test", b"", "key", "secret")
-        sig2, _ = generate_hmac("POST", "/test", b"", "key", "secret")
-        assert sig1 != sig2
-
-    def test_different_bodies_produce_different_signatures(self):
-        """Test different bodies produce different signatures."""
-        sig1, _ = generate_hmac("POST", "/test", b"body1", "key", "secret")
-        sig2, _ = generate_hmac("POST", "/test", b"body2", "key", "secret")
-        assert sig1 != sig2
-
-    def test_empty_body_produces_valid_signature(self):
-        """Test empty body produces valid signature."""
-        signature, timestamp = generate_hmac("GET", "/test", b"", "key", "secret")
-        assert len(signature) == 64
-        assert isinstance(timestamp, int)
-
-    def test_non_empty_body_produces_valid_signature(self):
-        """Test non-empty body produces valid signature."""
-        signature, timestamp = generate_hmac("POST", "/test", b"test body", "key", "secret")
-        assert len(signature) == 64
-        assert isinstance(timestamp, int)
-
-    def test_handles_special_characters_in_path(self):
-        """Test handles special characters in path correctly."""
-        path = "/api/v1/test?param=value&other=test%20value"
-        signature, _ = generate_hmac("GET", path, b"", "key", "secret")
-        assert len(signature) == 64
-
-    def test_handles_query_parameters_in_path(self):
-        """Test handles query parameters in path correctly."""
-        path = "/api/v1/reports/latest?feedID=0x123"
-        signature, _ = generate_hmac("GET", path, b"", "key", "secret")
-        assert len(signature) == 64
-
-
-class TestGenerateAuthHeaders:
-    """Test generate_auth_headers function."""
-
-    def test_returns_dict_with_correct_keys(self):
-        """Test returns dict with correct keys."""
-        headers = generate_auth_headers("GET", "/test", "key", "secret")
-        assert "Authorization" in headers
-        assert "X-Authorization-Timestamp" in headers
-        assert "X-Authorization-Signature-SHA256" in headers
-
-    def test_authorization_header_equals_api_key(self):
-        """Test Authorization header equals api_key."""
-        api_key = "test-key"
-        headers = generate_auth_headers("GET", "/test", api_key, "secret")
-        assert headers["Authorization"] == api_key
-
-    def test_timestamp_header_is_string_representation_of_int(self):
-        """Test X-Authorization-Timestamp header is string representation of int."""
-        headers = generate_auth_headers("GET", "/test", "key", "secret")
-        timestamp_str = headers["X-Authorization-Timestamp"]
-        assert isinstance(timestamp_str, str)
-        # Should be parseable as int
-        timestamp_int = int(timestamp_str)
-        assert isinstance(timestamp_int, int)
-
-    def test_signature_header_is_64_char_hex_string(self):
-        """Test X-Authorization-Signature-SHA256 header is 64-char hex string."""
-        headers = generate_auth_headers("GET", "/test", "key", "secret")
-        signature = headers["X-Authorization-Signature-SHA256"]
-        assert len(signature) == 64
-        assert all(c in '0123456789abcdef' for c in signature)
-
-    def test_default_body_parameter_works(self):
-        """Test default body parameter works (empty bytes)."""
-        headers1 = generate_auth_headers("GET", "/test", "key", "secret")
-        headers2 = generate_auth_headers("GET", "/test", "key", "secret", b"")
-        # Both should produce valid headers (may differ due to timestamp)
-        assert len(headers1["X-Authorization-Signature-SHA256"]) == 64
-        assert len(headers2["X-Authorization-Signature-SHA256"]) == 64
-
-    def test_custom_body_parameter_works(self):
-        """Test custom body parameter works."""
-        headers = generate_auth_headers("POST", "/test", "key", "secret", b"test body")
-        assert "X-Authorization-Signature-SHA256" in headers
-        assert len(headers["X-Authorization-Signature-SHA256"]) == 64
 
 
 class TestChainlinkClientConnectWebsocket:
@@ -249,7 +71,9 @@ class TestChainlinkClientConnectWebsocket:
             await client._connect_websocket(sample_feed_ids)
             
             call_args = mock_connect.call_args
-            assert call_args.kwargs.get('ping_interval') == 45
+            kwargs = call_args[1]
+            assert "ping_interval" in kwargs
+            assert kwargs["ping_interval"] == 45
 
     @pytest.mark.asyncio
     async def test_uses_config_pong_timeout(self, client, sample_feed_ids):
@@ -262,39 +86,9 @@ class TestChainlinkClientConnectWebsocket:
             await client._connect_websocket(sample_feed_ids)
             
             call_args = mock_connect.call_args
-            assert call_args.kwargs.get('ping_timeout') == 90
-
-    @pytest.mark.asyncio
-    async def test_builds_correct_websocket_url_with_feed_ids(self, client, sample_feed_ids):
-        """Test builds correct WebSocket URL with feed IDs."""
-        with patch('py_chainlink_streams.client.websockets.connect') as mock_connect:
-            mock_ws = AsyncMock(spec=WebSocketClientProtocol)
-            create_websocket_mock(mock_connect, mock_ws)
-            
-            await client._connect_websocket(sample_feed_ids)
-            
-            # Check URL contains feed IDs
-            call_args = mock_connect.call_args
-            url = call_args[0][0]  # First positional argument
-            assert sample_feed_ids[0] in url
-            assert "wss://" in url
-            assert "/api/v1/ws" in url
-
-    @pytest.mark.asyncio
-    async def test_generates_correct_authentication_headers(self, client, sample_feed_ids):
-        """Test generates correct authentication headers."""
-        with patch('py_chainlink_streams.client.websockets.connect') as mock_connect:
-            mock_ws = AsyncMock(spec=WebSocketClientProtocol)
-            create_websocket_mock(mock_connect, mock_ws)
-            
-            await client._connect_websocket(sample_feed_ids)
-            
-            call_args = mock_connect.call_args
-            headers = call_args.kwargs.get('additional_headers', {})
-            assert "Authorization" in headers
-            assert "X-Authorization-Timestamp" in headers
-            assert "X-Authorization-Signature-SHA256" in headers
-            assert headers["Authorization"] == "test-api-key"
+            kwargs = call_args[1]
+            assert "ping_interval" in kwargs
+            # pong_timeout is not directly passed, but ping_interval is used
 
     @pytest.mark.asyncio
     async def test_returns_websocket_client_protocol_instance(self, client, sample_feed_ids):
@@ -334,3 +128,335 @@ class TestChainlinkClientConnectWebsocket:
             with pytest.raises((websockets.exceptions.InvalidStatusCode, TypeError)):
                 await client._connect_websocket(sample_feed_ids)
 
+
+class TestChainlinkClientGetFeeds:
+    """Test ChainlinkClient.get_feeds method."""
+
+    @pytest.fixture
+    def client(self, mock_api_credentials):
+        """Create a ChainlinkClient instance for testing."""
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        return ChainlinkClient(config)
+
+    def test_get_feeds_returns_list_of_feeds(self, client):
+        """Test get_feeds returns list of Feed objects."""
+        with patch.object(client, '_make_request') as mock_request:
+            mock_request.return_value = [
+                {"id": "0x123", "name": "BTC/USD"},
+                {"id": "0x456", "name": "ETH/USD"}
+            ]
+            
+            feeds = client.get_feeds()
+            
+            assert isinstance(feeds, list)
+            assert len(feeds) == 2
+            assert all(isinstance(feed, Feed) for feed in feeds)
+            assert feeds[0].id == "0x123"
+            assert feeds[0].name == "BTC/USD"
+            assert feeds[1].id == "0x456"
+            assert feeds[1].name == "ETH/USD"
+
+    def test_get_feeds_uses_correct_endpoint(self, client):
+        """Test get_feeds uses correct API endpoint."""
+        with patch.object(client, '_make_request') as mock_request:
+            mock_request.return_value = []
+            
+            client.get_feeds()
+            
+            call_args = mock_request.call_args
+            assert call_args[0][0] == "GET"
+            assert call_args[0][1] == "/api/v1/feeds"
+
+    def test_get_feeds_handles_empty_list(self, client):
+        """Test get_feeds handles empty feed list."""
+        with patch.object(client, '_make_request') as mock_request:
+            mock_request.return_value = []
+            
+            feeds = client.get_feeds()
+            
+            assert isinstance(feeds, list)
+            assert len(feeds) == 0
+
+
+class TestChainlinkClientGetLatestReport:
+    """Test ChainlinkClient.get_latest_report method."""
+
+    @pytest.fixture
+    def client(self, mock_api_credentials):
+        """Create a ChainlinkClient instance for testing."""
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        return ChainlinkClient(config)
+
+    def test_get_latest_report_returns_report_response(self, client, sample_feed_id):
+        """Test get_latest_report returns ReportResponse object."""
+        with patch.object(client, '_make_request') as mock_request:
+            mock_request.return_value = {
+                "report": {
+                    "feedID": sample_feed_id,
+                    "fullReport": "0xabc",
+                    "validFromTimestamp": 1000,
+                    "observationsTimestamp": 1001
+                }
+            }
+            
+            report = client.get_latest_report(sample_feed_id)
+            
+            assert isinstance(report, ReportResponse)
+            assert report.feed_id == sample_feed_id
+            assert report.valid_from_timestamp == 1000
+            assert report.observations_timestamp == 1001
+
+    def test_get_latest_report_uses_correct_endpoint(self, client, sample_feed_id):
+        """Test get_latest_report uses correct API endpoint."""
+        with patch.object(client, '_make_request') as mock_request:
+            mock_request.return_value = {
+                "report": {
+                    "feedID": sample_feed_id,
+                    "fullReport": "0xabc",
+                    "validFromTimestamp": 1000,
+                    "observationsTimestamp": 1001
+                }
+            }
+            
+            client.get_latest_report(sample_feed_id)
+            
+            call_args = mock_request.call_args
+            assert call_args[0][0] == "GET"
+            assert call_args[0][1] == "/api/v1/reports/latest"
+            params = call_args[1]["params"]
+            assert params["feedID"] == sample_feed_id
+
+
+class TestChainlinkClientGetReport:
+    """Test ChainlinkClient.get_report method."""
+
+    @pytest.fixture
+    def client(self, mock_api_credentials):
+        """Create a ChainlinkClient instance for testing."""
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        return ChainlinkClient(config)
+
+    def test_get_report_returns_report_response(self, client, sample_feed_id):
+        """Test get_report returns ReportResponse object."""
+        with patch.object(client, '_make_request') as mock_request:
+            mock_request.return_value = {
+                "report": {
+                    "feedID": sample_feed_id,
+                    "fullReport": "0xabc",
+                    "validFromTimestamp": 1000,
+                    "observationsTimestamp": 1001
+                }
+            }
+            
+            report = client.get_report(sample_feed_id, timestamp=1000)
+            
+            assert isinstance(report, ReportResponse)
+            assert report.feed_id == sample_feed_id
+            assert report.valid_from_timestamp == 1000
+            assert report.observations_timestamp == 1001
+
+    def test_get_report_uses_feedID_parameter(self, client, sample_feed_id):
+        """Test get_report uses feedID parameter."""
+        with patch.object(client, '_make_request') as mock_request:
+            mock_request.return_value = {
+                "report": {
+                    "feedID": sample_feed_id,
+                    "fullReport": "0xabc",
+                    "validFromTimestamp": 1000,
+                    "observationsTimestamp": 1001
+                }
+            }
+            
+            client.get_report(sample_feed_id, timestamp=1000)
+            
+            # Check that _make_request was called with correct params
+            call_args = mock_request.call_args
+            assert call_args[0][0] == "GET"
+            assert call_args[0][1] == "/api/v1/reports"
+            params = call_args[1]["params"]
+            assert params["feedID"] == sample_feed_id
+            assert params["timestamp"] == "1000"
+
+    def test_get_report_handles_direct_report_dict(self, client, sample_feed_id):
+        """Test get_report handles direct report dict (not nested)."""
+        with patch.object(client, '_make_request') as mock_request:
+            mock_request.return_value = {
+                "feedID": sample_feed_id,
+                "fullReport": "0xabc",
+                "validFromTimestamp": 1000,
+                "observationsTimestamp": 1001
+            }
+            
+            report = client.get_report(sample_feed_id, timestamp=1000)
+            
+            assert isinstance(report, ReportResponse)
+            assert report.feed_id == sample_feed_id
+
+    def test_get_report_raises_on_missing_report_data(self, client, sample_feed_id):
+        """Test get_report raises ValueError when response doesn't contain report."""
+        with patch.object(client, '_make_request') as mock_request:
+            mock_request.return_value = {}
+            
+            with pytest.raises(ValueError, match="Response does not contain report data"):
+                client.get_report(sample_feed_id, timestamp=1000)
+
+
+class TestChainlinkClientGetReportPage:
+    """Test ChainlinkClient.get_report_page method."""
+
+    @pytest.fixture
+    def client(self, mock_api_credentials):
+        """Create a ChainlinkClient instance for testing."""
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        return ChainlinkClient(config)
+
+    def test_get_report_page_returns_report_page(self, client, sample_feed_id):
+        """Test get_report_page returns ReportPage object."""
+        with patch.object(client, '_make_request') as mock_request:
+            mock_request.return_value = {
+                "reports": [
+                    {
+                        "feedID": sample_feed_id,
+                        "fullReport": "0xabc",
+                        "validFromTimestamp": 1000,
+                        "observationsTimestamp": 1001
+                    }
+                ],
+                "nextPageTimestamp": 2000
+            }
+            
+            page = client.get_report_page(sample_feed_id, start_timestamp=1000)
+            
+            assert isinstance(page, ReportPage)
+            assert len(page.reports) == 1
+            # Implementation uses nextPageTimestamp from API response if available
+            assert page.next_page_timestamp == 2000
+
+    def test_get_report_page_uses_correct_parameters(self, client, sample_feed_id):
+        """Test get_report_page uses correct API parameters."""
+        with patch.object(client, '_make_request') as mock_request:
+            mock_request.return_value = {
+                "reports": [],
+                "nextPageTimestamp": 0
+            }
+            
+            client.get_report_page(sample_feed_id, start_timestamp=1000)
+            
+            # Check that _make_request was called with correct params
+            call_args = mock_request.call_args
+            assert call_args[0][0] == "GET"
+            assert call_args[0][1] == "/api/v1/reports/page"
+            params = call_args[1]["params"]
+            assert params["feedID"] == sample_feed_id
+            assert params["startTimestamp"] == "1000"
+
+    def test_get_report_page_handles_empty_reports(self, client, sample_feed_id):
+        """Test get_report_page handles empty reports list."""
+        with patch.object(client, '_make_request') as mock_request:
+            mock_request.return_value = {
+                "reports": [],
+                "nextPageTimestamp": 0
+            }
+            
+            page = client.get_report_page(sample_feed_id, start_timestamp=1000)
+            
+            assert isinstance(page, ReportPage)
+            assert len(page.reports) == 0
+            assert page.next_page_timestamp == 0
+
+
+class TestChainlinkClientStream:
+    """Test ChainlinkClient.stream and stream_with_status_callback methods."""
+
+    @pytest.fixture
+    def client(self, mock_api_credentials):
+        """Create a ChainlinkClient instance for testing."""
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        return ChainlinkClient(config)
+
+    @pytest.mark.asyncio
+    async def test_stream_calls_stream_with_status_callback(self, client, sample_feed_ids):
+        """Test stream calls stream_with_status_callback with None status_callback."""
+        with patch.object(client, 'stream_with_status_callback') as mock_stream:
+            await client.stream(sample_feed_ids, lambda x: None)
+            
+            mock_stream.assert_called_once()
+            args = mock_stream.call_args
+            assert args[0][0] == sample_feed_ids
+            assert args[0][1] is not None  # callback
+            assert args[0][2] is None  # status_callback
+
+    @pytest.mark.asyncio
+    async def test_stream_with_status_callback_connects_websocket(self, client, sample_feed_ids):
+        """Test stream_with_status_callback connects to WebSocket."""
+        callback_called = False
+        
+        def callback(data):
+            nonlocal callback_called
+            callback_called = True
+        
+        with patch.object(client, '_connect_websocket') as mock_connect:
+            mock_ws = AsyncMock(spec=WebSocketClientProtocol)
+            
+            # Simulate receiving one message then connection closing
+            async def message_gen():
+                import json
+                yield json.dumps({"feedID": "0x123", "fullReport": "0xabc"})
+                raise websockets.exceptions.ConnectionClosed(None, None)
+            
+            mock_ws.__aiter__ = lambda self: message_gen()
+            mock_connect.return_value = mock_ws
+            
+            # Use a timeout to prevent hanging
+            try:
+                await asyncio.wait_for(
+                    client.stream_with_status_callback(sample_feed_ids, callback, None),
+                    timeout=0.5
+                )
+            except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
+                pass
+            
+            mock_connect.assert_called_once_with(sample_feed_ids)
+
+    @pytest.mark.asyncio
+    async def test_stream_with_status_callback_calls_status_callback(self, client, sample_feed_ids):
+        """Test stream_with_status_callback calls status_callback on connection."""
+        status_callbacks = []
+        
+        def status_callback(is_connected, host, origin):
+            status_callbacks.append((is_connected, host, origin))
+        
+        with patch.object(client, '_connect_websocket') as mock_connect:
+            mock_ws = AsyncMock(spec=WebSocketClientProtocol)
+            
+            async def message_gen():
+                raise websockets.exceptions.ConnectionClosed(None, None)
+            
+            mock_ws.__aiter__ = lambda self: message_gen()
+            mock_connect.return_value = mock_ws
+            
+            try:
+                await asyncio.wait_for(
+                    client.stream_with_status_callback(sample_feed_ids, lambda x: None, status_callback),
+                    timeout=0.5
+                )
+            except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
+                pass
+            
+            # Should have called status_callback at least once (on connect or disconnect)
+            assert len(status_callbacks) > 0

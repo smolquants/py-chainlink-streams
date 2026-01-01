@@ -132,14 +132,14 @@ for feed in feeds:
 report = client.get_latest_report("0x00039d9e45394f473ab1f050a1b963e6b05351e52d71e507509ada0c95ed75b8")
 print(f"Latest report timestamp: {report.observations_timestamp}")
 
-# Get reports for multiple feeds at a specific timestamp
+# Get a report for a feed at a specific timestamp
 import time
 timestamp = int(time.time()) - 3600  # 1 hour ago
-reports = client.get_reports(
-    feed_ids=["0x00039d9e45394f473ab1f050a1b963e6b05351e52d71e507509ada0c95ed75b8"],
+report = client.get_report(
+    feed_id="0x00039d9e45394f473ab1f050a1b963e6b05351e52d71e507509ada0c95ed75b8",
     timestamp=timestamp
 )
-print(f"Found {len(reports)} reports at timestamp {timestamp}")
+print(f"Found report at timestamp {timestamp}: {report.observations_timestamp}")
 
 # Paginate through reports
 page = client.get_report_page(
@@ -320,7 +320,7 @@ Main client class for Chainlink Data Streams API (similar to Go SDK's Client int
 **Methods:**
 - `get_feeds()` → `List[Feed]`: List all available feeds
 - `get_latest_report(feed_id: str)` → `ReportResponse`: Get latest report for a feed
-- `get_reports(feed_ids: List[str], timestamp: int)` → `List[ReportResponse]`: Get reports at a timestamp
+- `get_report(feed_id: str, timestamp: int)` → `ReportResponse`: Get a report for a feed at a specific timestamp
 - `get_report_page(feed_id: str, start_timestamp: int)` → `ReportPage`: Paginate through reports
 - `stream(feed_ids: List[str], callback: Callable)` → `None`: Stream reports (async)
 - `stream_with_status_callback(feed_ids: List[str], callback: Callable, status_callback: Optional[Callable])` → `None`: Stream with status callbacks (async)
@@ -338,12 +338,12 @@ The SDK includes comprehensive unit tests with **90%+ code coverage**.
 
 ### Test Coverage
 
-- ✅ **123 unit tests** covering all core functionality
-- ✅ **15+ integration tests** for real mainnet API verification
+- ✅ **141+ unit tests** covering all core functionality
+- ✅ **25+ integration tests** for real mainnet API verification (single and multiple feed IDs)
 - ✅ **5 basic integration tests** for functionality verification
 - ✅ All modules tested: `client.py`, `report.py`, `feed.py`, `auth.py`, `config.py`, `constants.py`
 - ✅ Mocked network tests for HTTP and WebSocket operations
-- ✅ Real API integration tests with Chainlink mainnet
+- ✅ Real API integration tests with Chainlink mainnet (BTC/USD and ETH/USD feeds)
 - ✅ Error handling and edge cases covered
 
 ### Running Tests
@@ -397,13 +397,13 @@ pytest -m integration tests/test_integration.py::TestFetchSingleReportMainnet::t
 
 **Integration Test Coverage:**
 - ✅ HTTP REST API calls to mainnet
-- ✅ Real report fetching and validation
+- ✅ Real report fetching and validation (BTC/USD and ETH/USD feeds)
 - ✅ Report decoding with real data
-- ✅ WebSocket connections to mainnet
-- ✅ Real-time report streaming
+- ✅ WebSocket connections to mainnet (single and multiple feed IDs)
+- ✅ Real-time report streaming (single and multiple feed IDs)
 - ✅ End-to-end workflows (fetch → decode → get prices)
 - ✅ Error handling with real API
-- ✅ Performance and reliability tests
+- ✅ Performance and reliability tests (single and multiple feeds)
 
 **Note:** Integration tests are automatically skipped if API credentials are not set. They are marked with `@pytest.mark.integration` and can be excluded from CI/CD pipelines if needed.
 
@@ -411,13 +411,14 @@ pytest -m integration tests/test_integration.py::TestFetchSingleReportMainnet::t
 
 ```
 tests/
-├── test_constants.py      # 7 tests - Constants validation
-├── test_client.py         # 35 tests - Authentication & WebSocket connection
-├── test_decode.py         # 46 tests - Report decoding & price conversion
-├── test_report.py         # 30 tests - HTTP fetching & WebSocket streaming
-├── test_basic.py          # 5 tests - Basic integration tests
-├── test_integration.py    # 15+ tests - Real mainnet API integration tests
-└── conftest.py            # Shared fixtures and test utilities
+├── test_auth.py           # 27 tests - Authentication functions (HMAC, headers, credentials)
+├── test_client.py          # 18 tests - ChainlinkClient methods (HTTP, WebSocket, streaming)
+├── test_constants.py       # 8 tests - Constants validation
+├── test_feed.py            # 9 tests - Feed class functionality
+├── test_report.py          # 59 tests - ReportResponse and ReportPage classes (including decode)
+├── test_basic.py           # 5 tests - Basic integration tests
+├── test_integration.py     # 25+ tests - Real mainnet API integration tests (single & multiple feeds)
+└── conftest.py             # Shared fixtures and test utilities
 ```
 
 All tests are documented and organized by module in the test files.
@@ -468,7 +469,7 @@ This section outlines potential future improvements to the SDK. The current impl
 
 #### Additional HTTP API Methods
 - [ ] `get_feeds()` - List all available feeds
-- [ ] `get_reports(feed_ids, timestamp)` - Get reports at specific timestamp
+- [ ] `get_report(feed_id, timestamp)` - Get a report for a feed at a specific timestamp
 - [ ] `get_report_page()` - Paginate reports
 
 #### Logging Configuration
