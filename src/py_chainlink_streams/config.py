@@ -32,6 +32,10 @@ class ChainlinkConfig:
         logger: Optional logging function (default: None, uses print)
         ws_ha: Enable WebSocket high availability mode (default: False)
         ws_max_reconnect: Maximum WebSocket reconnection attempts (default: 10)
+        ws_reconnect_backoff_factor: Exponential backoff factor for WebSocket reconnection (default: 2.0)
+        ws_reconnect_initial_delay: Initial delay in seconds before first reconnection attempt (default: 1.0)
+        http_max_retries: Maximum retry attempts for HTTP requests (default: 3)
+        http_backoff_factor: Exponential backoff factor for HTTP retries (default: 2.0)
         insecure_skip_verify: Skip TLS certificate verification (default: False)
     """
     api_key: str
@@ -44,6 +48,10 @@ class ChainlinkConfig:
     logger: Optional[Callable[[str], None]] = None
     ws_ha: bool = False
     ws_max_reconnect: int = 10
+    ws_reconnect_backoff_factor: float = 2.0
+    ws_reconnect_initial_delay: float = 1.0
+    http_max_retries: int = 3
+    http_backoff_factor: float = 2.0
     insecure_skip_verify: bool = False
     
     def _log(self, message: str) -> None:

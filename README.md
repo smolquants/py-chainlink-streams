@@ -3,7 +3,7 @@
 [![Python Version](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![PyPI Version](https://img.shields.io/pypi/v/py-chainlink-streams)](https://pypi.org/project/py-chainlink-streams/)
-[![Test Coverage](https://img.shields.io/badge/coverage-86%25-brightgreen)](https://github.com/smolquants/py-chainlink-streams)
+[![Test Coverage](https://img.shields.io/badge/coverage-83%25-brightgreen)](https://github.com/smolquants/py-chainlink-streams)
 
 > **⚠️ Unofficial Client**: This is an **unofficial** Python SDK for Chainlink Data Streams API. It is not maintained or endorsed by Chainlink Labs or the Chainlink Foundation. Use at your own risk.
 
@@ -15,6 +15,8 @@ A lightweight Python SDK for Chainlink Data Streams API with support for both HT
 
 - ✅ **HTTP REST API** - Fetch latest reports for any feed
 - ✅ **WebSocket Streaming** - Real-time report streaming with automatic keepalive
+- ✅ **Automatic Reconnection** - WebSocket connections automatically reconnect with exponential backoff
+- ✅ **HTTP Retry Logic** - Automatic retry with exponential backoff for transient server errors
 - ✅ **Report Decoding** - Decode hex-encoded reports (v3 schema supported)
 - ✅ **Price Conversion** - Convert fixed-point prices to human-readable decimals
 - ✅ **Authentication** - HMAC-SHA256 signature generation
@@ -113,7 +115,7 @@ config = ChainlinkConfig(
     api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET")
 )
 
-# Or create config explicitly
+# Or create config explicitly with retry settings
 config = ChainlinkConfig(
     api_key="your-api-key",
     api_secret="your-api-secret",
@@ -121,7 +123,13 @@ config = ChainlinkConfig(
     ws_host="ws.dataengine.chain.link",     # Optional, defaults to mainnet
     timeout=30,                              # Optional, HTTP timeout
     ping_interval=30,                       # Optional, WebSocket ping interval
-    pong_timeout=60                          # Optional, WebSocket pong timeout
+    pong_timeout=60,                         # Optional, WebSocket pong timeout
+    # Retry configuration
+    http_max_retries=3,                     # Optional, HTTP retry attempts (default: 3)
+    http_backoff_factor=2.0,                # Optional, HTTP exponential backoff factor (default: 2.0)
+    ws_max_reconnect=10,                     # Optional, WebSocket max reconnection attempts (default: 10)
+    ws_reconnect_backoff_factor=2.0,        # Optional, WebSocket exponential backoff factor (default: 2.0)
+    ws_reconnect_initial_delay=1.0          # Optional, WebSocket initial reconnection delay in seconds (default: 1.0)
 )
 
 # Create client
@@ -154,7 +162,7 @@ page = client.get_report_page(
 print(f"Page contains {len(page.reports)} reports")
 print(f"Next page timestamp: {page.next_page_timestamp}")
 
-# Stream reports with status callbacks
+# Stream reports with status callbacks (automatically reconnects on disconnect)
 async def on_status(is_connected: bool, host: str, origin: str):
     if is_connected:
         print(f"Connected to {host}")
@@ -169,6 +177,8 @@ await client.stream_with_status_callback(
     callback=process_report,
     status_callback=on_status
 )
+# Note: stream_with_status_callback automatically retries WebSocket connections
+# with exponential backoff if the connection is lost (configurable via ChainlinkConfig)
 ```
 
 ## Examples
@@ -316,6 +326,10 @@ Configuration dataclass for ChainlinkClient.
 - `logger` (Optional[Callable]): Optional logging function
 - `ws_ha` (bool): Enable WebSocket high availability mode (default: False)
 - `ws_max_reconnect` (int): Maximum WebSocket reconnection attempts (default: 10)
+- `ws_reconnect_backoff_factor` (float): Exponential backoff factor for WebSocket reconnection (default: 2.0)
+- `ws_reconnect_initial_delay` (float): Initial delay in seconds before first reconnection attempt (default: 1.0)
+- `http_max_retries` (int): Maximum retry attempts for HTTP requests (default: 3)
+- `http_backoff_factor` (float): Exponential backoff factor for HTTP retries (default: 2.0)
 - `insecure_skip_verify` (bool): Skip TLS certificate verification (default: False)
 
 
@@ -327,8 +341,8 @@ Main client class for Chainlink Data Streams API (similar to Go SDK's Client int
 - `get_latest_report(feed_id: str)` → `ReportResponse`: Get latest report for a feed
 - `get_report(feed_id: str, timestamp: int)` → `ReportResponse`: Get a report for a feed at a specific timestamp
 - `get_report_page(feed_id: str, start_timestamp: int)` → `ReportPage`: Paginate through reports
-- `stream(feed_ids: List[str], callback: Callable)` → `None`: Stream reports (async)
-- `stream_with_status_callback(feed_ids: List[str], callback: Callable, status_callback: Optional[Callable])` → `None`: Stream with status callbacks (async)
+- `stream(feed_ids: List[str], callback: Callable)` → `None`: Stream reports (async, automatically reconnects on disconnect)
+- `stream_with_status_callback(feed_ids: List[str], callback: Callable, status_callback: Optional[Callable])` → `None`: Stream with status callbacks (async, automatically reconnects on disconnect)
 
 ### Constants
 
@@ -348,7 +362,7 @@ python3 --version  # Should be 3.9 or higher
 
 ## Testing
 
-The SDK includes comprehensive unit tests with **86% code coverage**.
+The SDK includes comprehensive unit tests with **83% code coverage**.
 
 ### Test Coverage
 
@@ -359,7 +373,7 @@ The SDK includes comprehensive unit tests with **86% code coverage**.
 - ✅ Mocked network tests for HTTP and WebSocket operations
 - ✅ Real API integration tests with Chainlink mainnet (BTC/USD and ETH/USD feeds)
 - ✅ Error handling and edge cases covered
-- ✅ **86% code coverage** (86.49% as measured by coverage.py, excluding integration tests)
+- ✅ **83% code coverage** (83.37% as measured by coverage.py, excluding integration tests)
 
 ### Code Coverage
 
@@ -527,9 +541,9 @@ This section outlines potential future improvements to the SDK. The current impl
 ### Medium Priority
 
 #### WebSocket Enhancements
-- [ ] Add status callbacks (connected, disconnected, reconnecting, error)
+- ✅ Add status callbacks (connected, disconnected, reconnecting, error) - **COMPLETED v0.2.0**
 - [ ] Connection statistics tracking (messages received, uptime, errors)
-- [ ] Retry logic with exponential backoff
+- ✅ Retry logic with exponential backoff - **COMPLETED v0.3.3**
 
 #### Additional Schema Versions
 - [ ] Research and implement v4 schema (RWA)

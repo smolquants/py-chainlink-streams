@@ -7,6 +7,7 @@ This module tests ChainlinkClient class methods.
 import os
 import asyncio
 import pytest
+import requests
 from unittest.mock import patch, MagicMock, AsyncMock
 import websockets
 from websockets.client import WebSocketClientProtocol
@@ -539,3 +540,149 @@ class TestChainlinkClientStream:
             assert len(sync_callbacks) > 0
             assert len(async_callbacks) > 0
             # Verify no RuntimeWarning was raised (both should work correctly)
+    
+    @pytest.mark.asyncio
+    async def test_stream_with_status_callback_retries_on_connection_closed(self, client, sample_feed_ids):
+        """Test stream_with_status_callback retries on ConnectionClosed with exponential backoff."""
+        callback_calls = []
+        
+        def callback(data):
+            callback_calls.append(data)
+        
+        connect_count = [0]
+        
+        with patch.object(client, '_connect_websocket') as mock_connect:
+            def create_mock_ws():
+                connect_count[0] += 1
+                mock_ws = AsyncMock(spec=WebSocketClientProtocol)
+                
+                if connect_count[0] == 1:
+                    # First connection: close immediately
+                    async def message_gen():
+                        raise websockets.exceptions.ConnectionClosed(None, None)
+                    mock_ws.__aiter__ = lambda self: message_gen()
+                else:
+                    # Second connection: send one message then close
+                    async def message_gen():
+                        import json
+                        yield json.dumps({"feedID": "0x123", "fullReport": "0xabc"})
+                        raise websockets.exceptions.ConnectionClosed(None, None)
+                    mock_ws.__aiter__ = lambda self: message_gen()
+                
+                return mock_ws
+            
+            mock_connect.side_effect = create_mock_ws
+            
+            # Configure client for fast retries (for testing)
+            client.config.ws_max_reconnect = 2
+            client.config.ws_reconnect_initial_delay = 0.1
+            client.config.ws_reconnect_backoff_factor = 1.5
+            
+            # Use a timeout to prevent hanging
+            try:
+                await asyncio.wait_for(
+                    client.stream_with_status_callback(sample_feed_ids, callback, None),
+                    timeout=1.0
+                )
+            except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
+                pass
+            
+            # Should have attempted to connect at least twice (initial + retry)
+            assert mock_connect.call_count >= 2
+    
+    @pytest.mark.asyncio
+    async def test_stream_with_status_callback_stops_after_max_reconnects(self, client, sample_feed_ids):
+        """Test stream_with_status_callback stops after max reconnection attempts."""
+        connect_count = [0]
+        
+        with patch.object(client, '_connect_websocket') as mock_connect:
+            def create_mock_ws():
+                connect_count[0] += 1
+                mock_ws = AsyncMock(spec=WebSocketClientProtocol)
+                
+                # Always close immediately
+                async def message_gen():
+                    raise websockets.exceptions.ConnectionClosed(None, None)
+                mock_ws.__aiter__ = lambda self: message_gen()
+                
+                return mock_ws
+            
+            mock_connect.side_effect = create_mock_ws
+            
+            # Configure client for limited retries
+            client.config.ws_max_reconnect = 2
+            client.config.ws_reconnect_initial_delay = 0.05
+            client.config.ws_reconnect_backoff_factor = 1.5
+            
+            # Use a timeout to prevent hanging
+            try:
+                await asyncio.wait_for(
+                    client.stream_with_status_callback(sample_feed_ids, lambda x: None, None),
+                    timeout=0.5
+                )
+            except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
+                pass
+            
+            # Should have attempted to connect: 1 initial + 2 retries = 3 total
+            assert mock_connect.call_count == 3
+
+
+class TestChainlinkClientMakeRequest:
+    """Test ChainlinkClient._make_request retry logic."""
+    
+    @pytest.fixture
+    def client(self, mock_api_credentials):
+        """Create a ChainlinkClient instance for testing."""
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        return ChainlinkClient(config)
+    
+    def test_make_request_retries_on_server_error(self, client):
+        """Test _make_request retries on 5xx server errors with exponential backoff."""
+        with patch.object(client._session, 'request') as mock_request:
+            # First two attempts fail with 500, third succeeds
+            mock_response_500 = MagicMock()
+            mock_response_500.ok = False
+            mock_response_500.status_code = 500
+            mock_response_500.reason = "Internal Server Error"
+            mock_response_500.text = "Server Error"
+            mock_response_500.json.return_value = {"error": "Server Error"}
+            
+            mock_response_200 = MagicMock()
+            mock_response_200.ok = True
+            mock_response_200.json.return_value = {"success": True}
+            
+            mock_request.side_effect = [
+                requests.HTTPError(response=mock_response_500),
+                requests.HTTPError(response=mock_response_500),
+                mock_response_200
+            ]
+            
+            # Configure for fast retries (for testing)
+            client.config.http_max_retries = 2
+            client.config.http_backoff_factor = 0.1  # Very fast for testing
+            
+            result = client._make_request("GET", "/api/v1/test")
+            
+            assert result == {"success": True}
+            assert mock_request.call_count == 3
+    
+    def test_make_request_no_retry_on_client_error(self, client):
+        """Test _make_request does not retry on 4xx client errors."""
+        with patch.object(client._session, 'request') as mock_request:
+            mock_response_400 = MagicMock()
+            mock_response_400.ok = False
+            mock_response_400.status_code = 400
+            mock_response_400.reason = "Bad Request"
+            mock_response_400.text = "Invalid request"
+            mock_response_400.json.return_value = {"error": "Invalid request"}
+            
+            mock_request.side_effect = requests.HTTPError(response=mock_response_400)
+            
+            with pytest.raises(requests.HTTPError):
+                client._make_request("GET", "/api/v1/test")
+            
+            # Should not retry on 4xx errors
+            assert mock_request.call_count == 1

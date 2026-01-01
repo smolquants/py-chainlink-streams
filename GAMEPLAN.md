@@ -134,15 +134,15 @@ This document outlines the roadmap to make `py-chainlink-streams` a production-r
 **Estimated Effort:** 8-12 hours (depends on schema complexity)
 
 ### 2.4 Retry Logic
-**Status:** ❌ Missing
+**Status:** ✅ **COMPLETED** (v0.3.3)
 
-**Tasks:**
-- [ ] Add exponential backoff retry for HTTP requests
-- [ ] Add configurable retry settings (max_retries, backoff_factor)
-- [ ] Add retry for WebSocket reconnection
-- [ ] Document retry behavior
-
-**Estimated Effort:** 3-4 hours
+**Completed:**
+- ✅ Exponential backoff retry for HTTP requests (5xx errors only, no retry on 4xx)
+- ✅ Configurable retry settings (http_max_retries, http_backoff_factor)
+- ✅ Retry for WebSocket reconnection with exponential backoff
+- ✅ Configurable WebSocket retry settings (ws_max_reconnect, ws_reconnect_backoff_factor, ws_reconnect_initial_delay)
+- ✅ Automatic reconnection loop in stream_with_status_callback
+- ✅ Comprehensive unit tests for retry logic
 
 ## Phase 3: Advanced Features (Lower Priority)
 
@@ -290,7 +290,7 @@ This document outlines the roadmap to make `py-chainlink-streams` a production-r
 ### Sprint 3 (Week 3): Enhanced Features
 1. ✅ WebSocket status callbacks (2.1) - **COMPLETED v0.2.0**
 2. Connection statistics (2.2)
-3. Retry logic (2.4)
+3. ✅ Retry logic (2.4) - **COMPLETED v0.3.3**
 
 ### Sprint 4 (Week 4): Polish
 1. Additional schema versions (2.3) - start with v4

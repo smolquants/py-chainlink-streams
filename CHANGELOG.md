@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-01-01
+
+### Added
+- **Retry Logic for HTTP Requests**: Automatic retry with exponential backoff for 5xx server errors
+  - Configurable via `http_max_retries` (default: 3) and `http_backoff_factor` (default: 2.0)
+  - Does not retry on 4xx client errors (immediate failure)
+- **WebSocket Automatic Reconnection**: Automatic reconnection with exponential backoff when connection is lost
+  - Configurable via `ws_max_reconnect` (default: 10), `ws_reconnect_backoff_factor` (default: 2.0), and `ws_reconnect_initial_delay` (default: 1.0)
+  - Reconnection loop integrated into `stream_with_status_callback` method
+  - Status callbacks properly called on connection/disconnection events
+
+### Changed
+- `stream_with_status_callback` now automatically retries WebSocket connections on failure
+- HTTP requests now retry on transient server errors (5xx) but fail immediately on client errors (4xx)
+
+### Fixed
+- WebSocket disconnections now trigger automatic reconnection attempts instead of immediately stopping
+
 ## [0.3.2] - 2026-01-01
 
 ### Fixed
