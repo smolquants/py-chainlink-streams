@@ -3,7 +3,7 @@
 [![Python Version](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![PyPI Version](https://img.shields.io/pypi/v/py-chainlink-streams)](https://pypi.org/project/py-chainlink-streams/)
-[![Test Coverage](https://img.shields.io/badge/coverage-83%25-brightgreen)](https://github.com/smolquants/py-chainlink-streams)
+[![Test Coverage](https://img.shields.io/badge/coverage-81%25-brightgreen)](https://github.com/smolquants/py-chainlink-streams)
 
 > **⚠️ Unofficial Client**: This is an **unofficial** Python SDK for Chainlink Data Streams API. It is not maintained or endorsed by Chainlink Labs or the Chainlink Foundation. Use at your own risk.
 
@@ -362,7 +362,7 @@ python3 --version  # Should be 3.9 or higher
 
 ## Testing
 
-The SDK includes comprehensive unit tests with **83% code coverage**.
+The SDK includes comprehensive unit tests with **81% code coverage**.
 
 ### Test Coverage
 
@@ -373,7 +373,7 @@ The SDK includes comprehensive unit tests with **83% code coverage**.
 - ✅ Mocked network tests for HTTP and WebSocket operations
 - ✅ Real API integration tests with Chainlink mainnet (BTC/USD and ETH/USD feeds)
 - ✅ Error handling and edge cases covered
-- ✅ **83% code coverage** (83.37% as measured by coverage.py, excluding integration tests)
+- ✅ **81% code coverage** (81.18% as measured by coverage.py, excluding integration tests)
 
 ### Code Coverage
 

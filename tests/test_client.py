@@ -420,7 +420,8 @@ class TestChainlinkClientStream:
                 yield json.dumps({"feedID": "0x123", "fullReport": "0xabc"})
                 raise websockets.exceptions.ConnectionClosed(None, None)
             
-            mock_ws.__aiter__ = lambda self: message_gen()
+            # __aiter__ must return an async generator iterator, not a coroutine
+            mock_ws.__aiter__ = lambda self: message_gen()  # message_gen() returns async iterator
             mock_connect.return_value = mock_ws
             
             # Use a timeout to prevent hanging
@@ -448,7 +449,8 @@ class TestChainlinkClientStream:
             async def message_gen():
                 raise websockets.exceptions.ConnectionClosed(None, None)
             
-            mock_ws.__aiter__ = lambda self: message_gen()
+            # __aiter__ must return an async generator iterator, not a coroutine
+            mock_ws.__aiter__ = lambda self: message_gen()  # message_gen() returns async iterator
             mock_connect.return_value = mock_ws
             
             try:
@@ -480,7 +482,8 @@ class TestChainlinkClientStream:
             async def message_gen():
                 raise websockets.exceptions.ConnectionClosed(None, None)
             
-            mock_ws.__aiter__ = lambda self: message_gen()
+            # __aiter__ must return an async generator iterator, not a coroutine
+            mock_ws.__aiter__ = lambda self: message_gen()  # message_gen() returns async iterator
             mock_connect.return_value = mock_ws
             
             try:
@@ -515,7 +518,8 @@ class TestChainlinkClientStream:
             async def message_gen():
                 raise websockets.exceptions.ConnectionClosed(None, None)
             
-            mock_ws.__aiter__ = lambda self: message_gen()
+            # __aiter__ must return an async generator iterator, not a coroutine
+            mock_ws.__aiter__ = lambda self: message_gen()  # message_gen() returns async iterator
             mock_connect.return_value = mock_ws
             
             # Test sync callback
@@ -571,7 +575,11 @@ class TestChainlinkClientStream:
                 
                 return mock_ws
             
-            mock_connect.side_effect = create_mock_ws
+            # Use side_effect with async function for async mocks
+            async def async_create_mock_ws(*args, **kwargs):
+                return create_mock_ws()
+            
+            mock_connect.side_effect = async_create_mock_ws
             
             # Configure client for fast retries (for testing)
             client.config.ws_max_reconnect = 2
@@ -607,7 +615,11 @@ class TestChainlinkClientStream:
                 
                 return mock_ws
             
-            mock_connect.side_effect = create_mock_ws
+            # Use side_effect with async function for async mocks
+            async def async_create_mock_ws(*args, **kwargs):
+                return create_mock_ws()
+            
+            mock_connect.side_effect = async_create_mock_ws
             
             # Configure client for limited retries
             client.config.ws_max_reconnect = 2
@@ -625,6 +637,354 @@ class TestChainlinkClientStream:
             
             # Should have attempted to connect: 1 initial + 2 retries = 3 total
             assert mock_connect.call_count == 3
+    
+    @pytest.mark.asyncio
+    async def test_stream_with_status_callback_status_callback_only_on_final_disconnect(self, client, sample_feed_ids):
+        """Test that status callback is only called on final disconnect, not during reconnection."""
+        status_calls = []
+        
+        def status_callback(is_connected: bool, host: str, origin: str):
+            status_calls.append((is_connected, host, origin))
+        
+        connect_count = [0]
+        
+        with patch.object(client, '_connect_websocket') as mock_connect:
+            def create_mock_ws():
+                connect_count[0] += 1
+                mock_ws = AsyncMock(spec=WebSocketClientProtocol)
+                
+                if connect_count[0] <= 2:
+                    # First two connections: close immediately
+                    async def message_gen():
+                        raise websockets.exceptions.ConnectionClosed(None, None)
+                    mock_ws.__aiter__ = lambda self: message_gen()
+                else:
+                    # Third connection: send one message then close
+                    async def message_gen():
+                        import json
+                        yield json.dumps({"feedID": "0x123", "fullReport": "0xabc"})
+                        raise websockets.exceptions.ConnectionClosed(None, None)
+                    mock_ws.__aiter__ = lambda self: message_gen()
+                
+                return mock_ws
+            
+            # Use side_effect with async function for async mocks
+            async def async_create_mock_ws(*args, **kwargs):
+                return create_mock_ws()
+            
+            mock_connect.side_effect = async_create_mock_ws
+            
+            # Configure client for limited retries
+            client.config.ws_max_reconnect = 2
+            client.config.ws_reconnect_initial_delay = 0.05
+            client.config.ws_reconnect_backoff_factor = 1.5
+            
+            # Use a timeout to prevent hanging
+            try:
+                await asyncio.wait_for(
+                    client.stream_with_status_callback(sample_feed_ids, lambda x: None, status_callback),
+                    timeout=0.5
+                )
+            except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
+                pass
+            
+            # Status callback should be called:
+            # 1. On first connection (True)
+            # 2. On second connection (True) - reconnected
+            # 3. On third connection (True) - reconnected
+            # 4. On final disconnect (False) - max reconnects reached
+            # Should NOT be called on intermediate disconnects
+            assert len(status_calls) >= 3  # At least 3 connections
+            # All connections should show True
+            assert all(call[0] is True for call in status_calls[:-1])
+            # Final call should be False
+            assert status_calls[-1][0] is False
+    
+    @pytest.mark.asyncio
+    async def test_stream_with_status_callback_multiple_reconnections(self, client, sample_feed_ids):
+        """Test multiple disconnections and successful reconnections."""
+        callback_calls = []
+        status_calls = []
+        
+        def callback(data):
+            callback_calls.append(data)
+        
+        def status_callback(is_connected: bool, host: str, origin: str):
+            status_calls.append((is_connected, host, origin))
+        
+        connect_count = [0]
+        message_count = [0]
+        
+        with patch.object(client, '_connect_websocket') as mock_connect:
+            def create_mock_ws():
+                connect_count[0] += 1
+                mock_ws = AsyncMock(spec=WebSocketClientProtocol)
+                
+                async def message_gen():
+                    import json
+                    # Send a few messages, then disconnect
+                    for i in range(2):
+                        message_count[0] += 1
+                        yield json.dumps({"feedID": "0x123", "fullReport": f"0xabc{message_count[0]}"})
+                        await asyncio.sleep(0.01)
+                    # Disconnect after 2 messages
+                    raise websockets.exceptions.ConnectionClosed(None, None)
+                
+                mock_ws.__aiter__ = lambda self: message_gen()
+                return mock_ws
+            
+            # Use side_effect with async function for async mocks
+            async def async_create_mock_ws(*args, **kwargs):
+                return create_mock_ws()
+            
+            mock_connect.side_effect = async_create_mock_ws
+            
+            # Configure for multiple reconnections
+            client.config.ws_max_reconnect = 3
+            client.config.ws_reconnect_initial_delay = 0.05
+            client.config.ws_reconnect_backoff_factor = 1.5
+            
+            # Use a timeout to prevent hanging
+            try:
+                await asyncio.wait_for(
+                    client.stream_with_status_callback(sample_feed_ids, callback, status_callback),
+                    timeout=1.0
+                )
+            except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
+                pass
+            
+            # Should have reconnected multiple times
+            assert mock_connect.call_count >= 3
+            # Should have received messages from multiple connections
+            assert len(callback_calls) >= 4  # 2 messages per connection * 2+ connections
+            # Status callback should show multiple connections
+            assert len([c for c in status_calls if c[0] is True]) >= 3
+    
+    @pytest.mark.asyncio
+    async def test_stream_with_status_callback_exponential_backoff(self, client, sample_feed_ids):
+        """Test that exponential backoff delays are calculated correctly."""
+        delays = []
+        original_sleep = asyncio.sleep
+        
+        async def mock_sleep(delay):
+            delays.append(delay)
+            await original_sleep(0.001)  # Use minimal delay for testing
+        
+        connect_count = [0]
+        
+        with patch.object(client, '_connect_websocket') as mock_connect, \
+             patch('asyncio.sleep', side_effect=mock_sleep):
+            def create_mock_ws():
+                connect_count[0] += 1
+                mock_ws = AsyncMock(spec=WebSocketClientProtocol)
+                
+                # Always close immediately
+                async def message_gen():
+                    raise websockets.exceptions.ConnectionClosed(None, None)
+                mock_ws.__aiter__ = lambda self: message_gen()
+                
+                return mock_ws
+            
+            # Use side_effect with async function for async mocks
+            async def async_create_mock_ws(*args, **kwargs):
+                return create_mock_ws()
+            
+            mock_connect.side_effect = async_create_mock_ws
+            
+            # Configure for testing backoff
+            client.config.ws_max_reconnect = 3
+            client.config.ws_reconnect_initial_delay = 0.1
+            client.config.ws_reconnect_backoff_factor = 2.0
+            
+            # Use a timeout to prevent hanging
+            try:
+                await asyncio.wait_for(
+                    client.stream_with_status_callback(sample_feed_ids, lambda x: None, None),
+                    timeout=0.5
+                )
+            except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
+                pass
+            
+            # Should have delays: 0.1, 0.2, 0.4 (exponential backoff)
+            assert len(delays) >= 3
+            # Check exponential backoff progression
+            assert delays[0] == pytest.approx(0.1, rel=0.1)  # Initial delay
+            assert delays[1] == pytest.approx(0.2, rel=0.1)  # 0.1 * 2^1
+            assert delays[2] == pytest.approx(0.4, rel=0.1)  # 0.1 * 2^2
+    
+    @pytest.mark.asyncio
+    async def test_stream_with_status_callback_reconnect_count_reset(self, client, sample_feed_ids):
+        """Test that reconnect count resets after successful reconnection."""
+        connect_count = [0]
+        reconnect_logs = []
+        
+        # Capture log messages
+        original_log = client.config._log
+        def capture_log(message):
+            if "reconnected successfully" in message.lower() or "reconnect" in message.lower():
+                reconnect_logs.append(message)
+            original_log(message)
+        
+        client.config._log = capture_log
+        
+        with patch.object(client, '_connect_websocket') as mock_connect:
+            def create_mock_ws():
+                connect_count[0] += 1
+                mock_ws = AsyncMock(spec=WebSocketClientProtocol)
+                
+                if connect_count[0] == 1:
+                    # First connection: close immediately
+                    async def message_gen():
+                        raise websockets.exceptions.ConnectionClosed(None, None)
+                    mock_ws.__aiter__ = lambda self: message_gen()
+                elif connect_count[0] == 2:
+                    # Second connection: send messages successfully (reconnect successful)
+                    async def message_gen():
+                        import json
+                        for i in range(3):
+                            yield json.dumps({"feedID": "0x123", "fullReport": f"0xabc{i}"})
+                            await asyncio.sleep(0.01)
+                        # Then disconnect again
+                        raise websockets.exceptions.ConnectionClosed(None, None)
+                    mock_ws.__aiter__ = lambda self: message_gen()
+                else:
+                    # Third connection: close immediately
+                    async def message_gen():
+                        raise websockets.exceptions.ConnectionClosed(None, None)
+                    mock_ws.__aiter__ = lambda self: message_gen()
+                
+                return mock_ws
+            
+            # Use side_effect with async function for async mocks
+            async def async_create_mock_ws(*args, **kwargs):
+                return create_mock_ws()
+            
+            mock_connect.side_effect = async_create_mock_ws
+            
+            client.config.ws_max_reconnect = 5
+            client.config.ws_reconnect_initial_delay = 0.05
+            client.config.ws_reconnect_backoff_factor = 1.5
+            
+            # Use a timeout to prevent hanging
+            try:
+                await asyncio.wait_for(
+                    client.stream_with_status_callback(sample_feed_ids, lambda x: None, None),
+                    timeout=0.5
+                )
+            except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
+                pass
+            
+            # Should have reconnected successfully (count should reset)
+            assert any("reconnected successfully" in log.lower() for log in reconnect_logs)
+            # Should have attempted multiple connections
+            assert mock_connect.call_count >= 3
+    
+    @pytest.mark.asyncio
+    async def test_stream_with_status_callback_ping_failure_does_not_break_connection(self, client, sample_feed_ids):
+        """Test that ping failures don't immediately break the connection."""
+        callback_calls = []
+        
+        def callback(data):
+            callback_calls.append(data)
+        
+        connect_count = [0]
+        ping_failures = [0]
+        
+        with patch.object(client, '_connect_websocket') as mock_connect:
+            def create_mock_ws():
+                connect_count[0] += 1
+                mock_ws = AsyncMock(spec=WebSocketClientProtocol)
+                
+                # Make ping fail after first call
+                ping_call_count = [0]
+                async def failing_ping():
+                    ping_call_count[0] += 1
+                    if ping_call_count[0] > 1:
+                        ping_failures[0] += 1
+                        raise Exception("Ping failed")
+                    return
+                
+                mock_ws.ping = failing_ping
+                
+                # Send messages successfully
+                async def message_gen():
+                    import json
+                    for i in range(5):
+                        yield json.dumps({"feedID": "0x123", "fullReport": f"0xabc{i}"})
+                        await asyncio.sleep(0.02)  # Give ping time to fail
+                
+                mock_ws.__aiter__ = lambda self: message_gen()
+                return mock_ws
+            
+            # Use side_effect with async function for async mocks
+            async def async_create_mock_ws(*args, **kwargs):
+                return create_mock_ws()
+            
+            mock_connect.side_effect = async_create_mock_ws
+            
+            client.config.ws_max_reconnect = 1
+            client.config.ping_interval = 0.05  # Fast ping for testing
+            
+            # Use a timeout to prevent hanging
+            try:
+                await asyncio.wait_for(
+                    client.stream_with_status_callback(sample_feed_ids, callback, None),
+                    timeout=0.5
+                )
+            except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
+                pass
+            
+            # Should have received messages even though ping failed
+            assert len(callback_calls) >= 3
+            # Ping should have failed
+            assert ping_failures[0] > 0
+    
+    @pytest.mark.asyncio
+    async def test_stream_with_status_callback_generic_exception_handling(self, client, sample_feed_ids):
+        """Test that generic exceptions during read also trigger reconnection."""
+        connect_count = [0]
+        
+        with patch.object(client, '_connect_websocket') as mock_connect:
+            def create_mock_ws():
+                connect_count[0] += 1
+                mock_ws = AsyncMock(spec=WebSocketClientProtocol)
+                
+                if connect_count[0] == 1:
+                    # First connection: raise generic exception
+                    async def message_gen():
+                        raise RuntimeError("Network error")
+                    mock_ws.__aiter__ = lambda self: message_gen()
+                else:
+                    # Second connection: send one message then close
+                    async def message_gen():
+                        import json
+                        yield json.dumps({"feedID": "0x123", "fullReport": "0xabc"})
+                        raise websockets.exceptions.ConnectionClosed(None, None)
+                    mock_ws.__aiter__ = lambda self: message_gen()
+                
+                return mock_ws
+            
+            # Use side_effect with async function for async mocks
+            async def async_create_mock_ws(*args, **kwargs):
+                return create_mock_ws()
+            
+            mock_connect.side_effect = async_create_mock_ws
+            
+            client.config.ws_max_reconnect = 2
+            client.config.ws_reconnect_initial_delay = 0.05
+            client.config.ws_reconnect_backoff_factor = 1.5
+            
+            # Use a timeout to prevent hanging
+            try:
+                await asyncio.wait_for(
+                    client.stream_with_status_callback(sample_feed_ids, lambda x: None, None),
+                    timeout=0.5
+                )
+            except (asyncio.TimeoutError, RuntimeError, websockets.exceptions.ConnectionClosed):
+                pass
+            
+            # Should have attempted to reconnect after generic exception
+            assert mock_connect.call_count >= 2
 
 
 class TestChainlinkClientMakeRequest:

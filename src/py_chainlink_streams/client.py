@@ -435,139 +435,130 @@ class ChainlinkClient:
             status_callback: Optional function called on connection status changes.
                            Can be sync or async. Signature: (is_connected: bool, host: str, origin: str) -> None
         """
-        stop_event = asyncio.Event()
-        reconnect_count = 0
-        
-        def _call_status_callback(is_connected: bool, host: str, origin: str) -> None:
+        async def _call_status_callback(is_connected: bool, host: str, origin: str) -> None:
             """Helper to call status callback (sync or async)."""
             if status_callback:
                 if asyncio.iscoroutinefunction(status_callback):
-                    # Create a task for async callbacks
-                    asyncio.create_task(status_callback(is_connected, host, origin))
+                    await status_callback(is_connected, host, origin)
                 else:
                     status_callback(is_connected, host, origin)
         
-        while not stop_event.is_set() and reconnect_count <= self.config.ws_max_reconnect:
+        async def _stream_messages(websocket, stop_event):
+            """Stream messages from websocket until connection closes or stop_event is set."""
+            try:
+                async for message in websocket:
+                    if stop_event.is_set():
+                        break
+                    
+                    try:
+                        report_data = json.loads(message)
+                        if asyncio.iscoroutinefunction(callback):
+                            await callback(report_data)
+                        else:
+                            callback(report_data)
+                    except json.JSONDecodeError as e:
+                        self.config._log(f"Error parsing message: {e}")
+                        continue
+                    except Exception as e:
+                        self.config._log(f"Error in callback: {e}")
+                        continue
+            except ConnectionClosed:
+                raise  # Re-raise to handle reconnection
+            except Exception as e:
+                self.config._log(f"WebSocket read error: {e}")
+                raise  # Re-raise to handle reconnection
+        
+        async def _ping_loop(websocket, stop_event):
+            """Send periodic ping messages to keep WebSocket connection alive."""
+            while not stop_event.is_set():
+                try:
+                    await asyncio.sleep(self.config.ping_interval)
+                    if not stop_event.is_set() and websocket:
+                        await websocket.ping()
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    self.config._log(f"Error sending ping: {e}")
+                    # Don't break - let the read loop detect the issue
+        
+        stop_event = asyncio.Event()
+        reconnect_attempt = 0  # Number of reconnection attempts (0 = initial connection, 1+ = retries)
+        had_successful_connection = False
+        
+        while True:
             websocket = None
             ping_task = None
             
             try:
                 # Connect to WebSocket
                 websocket = await self._connect_websocket(feed_ids)
+                had_successful_connection = True
                 
-                # Reset reconnect count on successful connection
-                if reconnect_count > 0:
-                    self.config._log(f"WebSocket reconnected successfully (attempt {reconnect_count})")
-                    reconnect_count = 0
+                # Log reconnection if this is a retry
+                if reconnect_attempt > 0:
+                    self.config._log(f"WebSocket reconnected successfully (attempt {reconnect_attempt})")
+                    # Don't reset reconnect_attempt - we want to track total attempts
                 
-                # Call status callback if provided
-                _call_status_callback(True, self.config.ws_host, "")
-                
+                # Call status callback for successful connection
+                await _call_status_callback(True, self.config.ws_host, "")
                 self.config._log(f"WebSocket connection established for feeds: {feed_ids}")
                 
-                # Start ping loop in background
-                async def ping_loop():
-                    """Send periodic ping messages to keep WebSocket connection alive."""
-                    while not stop_event.is_set():
-                        try:
-                            await asyncio.sleep(self.config.ping_interval)
-                            if not stop_event.is_set() and websocket:
-                                await websocket.ping()
-                        except Exception as e:
-                            self.config._log(f"Error sending ping: {e}")
-                            break
+                # Start ping loop
+                ping_task = asyncio.create_task(_ping_loop(websocket, stop_event))
                 
-                ping_task = asyncio.create_task(ping_loop())
+                # Stream messages until connection closes or stop_event is set
+                await _stream_messages(websocket, stop_event)
                 
-                # Stream reports
-                try:
-                    async for message in websocket:
-                        try:
-                            # Parse JSON message
-                            report_data = json.loads(message)
-                            
-                            # Call callback with report data
-                            if asyncio.iscoroutinefunction(callback):
-                                await callback(report_data)
-                            else:
-                                callback(report_data)
-                            
-                            # Check if we should stop
-                            if stop_event.is_set():
-                                break
-                                
-                        except json.JSONDecodeError as e:
-                            self.config._log(f"Error parsing message: {e}")
-                            continue
-                        except Exception as e:
-                            self.config._log(f"Error in callback: {e}")
-                            continue
-                            
-                except ConnectionClosed as e:
-                    self.config._log(f"WebSocket connection closed: {e}")
-                    _call_status_callback(False, self.config.ws_host, "")
-                    
-                    # Check if we should retry
-                    if reconnect_count >= self.config.ws_max_reconnect:
-                        self.config._log(f"Maximum reconnection attempts ({self.config.ws_max_reconnect}) reached. Stopping.")
-                        break
-                    
-                    # Calculate exponential backoff delay
-                    delay = self.config.ws_reconnect_initial_delay * (self.config.ws_reconnect_backoff_factor ** reconnect_count)
-                    reconnect_count += 1
-                    self.config._log(
-                        f"Attempting to reconnect (attempt {reconnect_count}/{self.config.ws_max_reconnect}) "
-                        f"in {delay:.2f} seconds..."
-                    )
-                    await asyncio.sleep(delay)
-                    continue  # Retry connection
-                    
-                except Exception as e:
-                    self.config._log(f"WebSocket read error: {e}")
-                    _call_status_callback(False, self.config.ws_host, "")
-                    
-                    # Check if we should retry
-                    if reconnect_count >= self.config.ws_max_reconnect:
-                        self.config._log(f"Maximum reconnection attempts ({self.config.ws_max_reconnect}) reached. Stopping.")
-                        break
-                    
-                    # Calculate exponential backoff delay
-                    delay = self.config.ws_reconnect_initial_delay * (self.config.ws_reconnect_backoff_factor ** reconnect_count)
-                    reconnect_count += 1
-                    self.config._log(
-                        f"Attempting to reconnect (attempt {reconnect_count}/{self.config.ws_max_reconnect}) "
-                        f"in {delay:.2f} seconds..."
-                    )
-                    await asyncio.sleep(delay)
-                    continue  # Retry connection
-                
-                # If we exit the message loop normally (not due to error), break
+                # If we exit normally (stop_event was set), break
                 break
+                
+            except (ConnectionClosed, Exception) as e:
+                # Clean up current connection
+                if ping_task:
+                    ping_task.cancel()
+                    try:
+                        await ping_task
+                    except asyncio.CancelledError:
+                        pass
+                
+                if websocket:
+                    try:
+                        await websocket.close()
+                    except Exception:
+                        pass
+                
+                # Check if we should stop
+                if stop_event.is_set():
+                    if had_successful_connection:
+                        await _call_status_callback(False, self.config.ws_host, "")
+                    break
+                
+                # Increment reconnect attempt BEFORE checking limit
+                # reconnect_attempt = 0 means initial connection, 1+ means retries
+                reconnect_attempt += 1
+                
+                # Check if we've exceeded max reconnection attempts
+                # ws_max_reconnect = 2 means: allow initial (0) + 2 retries (1, 2) = 3 total attempts
+                if reconnect_attempt > self.config.ws_max_reconnect:
+                    self.config._log(f"Maximum reconnection attempts ({self.config.ws_max_reconnect}) reached. Stopping.")
+                    if had_successful_connection:
+                        await _call_status_callback(False, self.config.ws_host, "")
+                    break
+                
+                # Calculate exponential backoff delay
+                # For attempt 1: delay = initial_delay * (backoff_factor ** 0) = initial_delay
+                # For attempt 2: delay = initial_delay * (backoff_factor ** 1) = initial_delay * backoff_factor
+                delay = self.config.ws_reconnect_initial_delay * (self.config.ws_reconnect_backoff_factor ** (reconnect_attempt - 1))
+                
+                self.config._log(
+                    f"Connection lost. Reconnecting (attempt {reconnect_attempt}/{self.config.ws_max_reconnect}) "
+                    f"in {delay:.2f} seconds..."
+                )
+                await asyncio.sleep(delay)
                 
             except KeyboardInterrupt:
                 self.config._log("\nInterrupt signal received, closing connection...")
                 stop_event.set()
-                break
-            except Exception as e:
-                self.config._log(f"Error in stream: {e}")
-                _call_status_callback(False, self.config.ws_host, "")
-                
-                # Check if we should retry
-                if reconnect_count >= self.config.ws_max_reconnect:
-                    self.config._log(f"Maximum reconnection attempts ({self.config.ws_max_reconnect}) reached. Stopping.")
-                    break
-                
-                # Calculate exponential backoff delay
-                delay = self.config.ws_reconnect_initial_delay * (self.config.ws_reconnect_backoff_factor ** reconnect_count)
-                reconnect_count += 1
-                self.config._log(
-                    f"Attempting to reconnect (attempt {reconnect_count}/{self.config.ws_max_reconnect}) "
-                    f"in {delay:.2f} seconds..."
-                )
-                await asyncio.sleep(delay)
-                continue  # Retry connection
-            finally:
-                # Clean up current connection
                 if websocket:
                     try:
                         await websocket.close()
@@ -579,7 +570,7 @@ class ChainlinkClient:
                         await ping_task
                     except asyncio.CancelledError:
                         pass
-        
-        # Final status callback
-        _call_status_callback(False, self.config.ws_host, "")
+                if had_successful_connection:
+                    await _call_status_callback(False, self.config.ws_host, "")
+                break
 

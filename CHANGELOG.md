@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-01-01
+
+### Fixed
+- **WebSocket reconnection infinite loop**: Fixed critical bug where `reconnect_attempt` was resetting to 0 on successful reconnection, causing infinite reconnection loops. The attempt counter now properly tracks total connection attempts.
+- **WebSocket reconnection limit check**: Fixed reconnection check from `>=` to `>` to correctly enforce `ws_max_reconnect` limit (e.g., `ws_max_reconnect=2` now allows exactly 1 initial + 2 retries = 3 total attempts).
+- **Exponential backoff calculation**: Fixed backoff delay calculation to use `(reconnect_attempt - 1)` in exponent, ensuring correct delay progression (attempt 1: initial_delay, attempt 2: initial_delay * backoff_factor, etc.).
+- **WebSocket reconnection status callback**: Status callback now only called on final disconnect, not during automatic reconnection attempts. This reduces console spam when connections are automatically reconnecting.
+- **Improved reconnection error messages**: Better error messages during reconnection attempts ("Connection lost. Reconnecting..." vs "Attempting to reconnect...").
+
+### Changed
+- **Refactored `stream_with_status_callback` method**: Significantly simplified and cleaned up the WebSocket streaming implementation:
+  - Extracted `_stream_messages()` helper function for message processing
+  - Extracted `_ping_loop()` helper function for keepalive pings
+  - Simplified main reconnection loop logic
+  - Reduced code complexity and improved maintainability
+  - Fixed all reconnection logic bugs in the process
+
+### Added
+- **Comprehensive WebSocket reconnection tests**: Added 6 unit tests and 2 integration tests covering:
+  - Status callback behavior during reconnection
+  - Multiple disconnections and reconnections
+  - Exponential backoff calculation
+  - Reconnect count reset logic
+  - Ping failure handling
+  - Generic exception handling
+
 ## [0.3.3] - 2026-01-01
 
 ### Added

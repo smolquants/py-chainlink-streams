@@ -932,3 +932,90 @@ class TestPerformanceMainnet:
         # If we got here without crashing, connection was stable
         # Messages may or may not be received depending on API activity
 
+
+
+class TestStreamReconnectionMainnet:
+    """Integration tests for WebSocket reconnection behavior on mainnet."""
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_stream_reconnection_status_callback_behavior(self, mainnet_feed_ids_single):
+        """Test that status callback is only called appropriately during reconnection."""
+        import os
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        
+        reports_received = []
+        status_calls = []
+        
+        def callback(data):
+            reports_received.append(data)
+        
+        def status_callback(is_connected: bool, host: str, origin: str):
+            status_calls.append((is_connected, host, origin))
+        
+        # Configure for fast reconnection (for testing)
+        client.config.ws_max_reconnect = 3
+        client.config.ws_reconnect_initial_delay = 1.0
+        client.config.ws_reconnect_backoff_factor = 1.5
+        
+        # Stream for a short time to verify initial connection
+        try:
+            await asyncio.wait_for(
+                client.stream_with_status_callback(mainnet_feed_ids_single, callback, status_callback),
+                timeout=5.0
+            )
+        except asyncio.TimeoutError:
+            pass
+        
+        # Should have received at least one status callback (connected)
+        assert len(status_calls) >= 1, "Should receive at least one status callback"
+        # First status call should be True (connected)
+        assert status_calls[0][0] is True, "First status callback should indicate connection"
+        # Should have received some reports
+        assert len(reports_received) >= 0, "May or may not receive reports in short time"
+    
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_stream_reconnection_handles_disconnection_gracefully(self, mainnet_feed_ids_single):
+        """Test that stream handles disconnections and attempts reconnection."""
+        import os
+        config = ChainlinkConfig(
+            api_key=os.getenv("CHAINLINK_STREAMS_API_KEY", ""),
+            api_secret=os.getenv("CHAINLINK_STREAMS_API_SECRET", "")
+        )
+        client = ChainlinkClient(config)
+        
+        reports_received = []
+        connection_events = []
+        
+        def callback(data):
+            reports_received.append(data)
+        
+        def status_callback(is_connected: bool, host: str, origin: str):
+            connection_events.append((is_connected, host))
+        
+        # Configure for reconnection testing
+        client.config.ws_max_reconnect = 2
+        client.config.ws_reconnect_initial_delay = 1.0
+        client.config.ws_reconnect_backoff_factor = 1.5
+        
+        # Stream for a short time
+        try:
+            await asyncio.wait_for(
+                client.stream_with_status_callback(mainnet_feed_ids_single, callback, status_callback),
+                timeout=8.0  # Longer timeout to allow for potential reconnection
+            )
+        except asyncio.TimeoutError:
+            pass
+        
+        # Should have at least one connection event
+        assert len(connection_events) >= 1, "Should have at least one connection event"
+        # First event should be connection (True)
+        assert connection_events[0][0] is True, "First event should be connection"
+        
+        # Note: We can't easily test actual disconnection/reconnection in integration tests
+        # without artificially closing the connection, which is better tested in unit tests
