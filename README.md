@@ -252,9 +252,11 @@ The SDK includes comprehensive unit tests with **90%+ code coverage**.
 ### Test Coverage
 
 - ✅ **123 unit tests** covering all core functionality
-- ✅ **5 integration tests** for basic functionality verification
+- ✅ **15+ integration tests** for real mainnet API verification
+- ✅ **5 basic integration tests** for functionality verification
 - ✅ All modules tested: `client.py`, `report.py`, `decode.py`, `constants.py`
 - ✅ Mocked network tests for HTTP and WebSocket operations
+- ✅ Real API integration tests with Chainlink mainnet
 - ✅ Error handling and edge cases covered
 
 ### Running Tests
@@ -263,7 +265,7 @@ The SDK includes comprehensive unit tests with **90%+ code coverage**.
 # Install test dependencies
 uv sync --extra dev
 
-# Run all tests
+# Run all tests (unit tests only, skips integration by default)
 pytest tests/
 
 # Run with coverage report
@@ -272,20 +274,63 @@ pytest --cov=py_chainlink_streams --cov-report=html tests/
 # Run specific test file
 pytest tests/test_client.py
 
-# Run only unit tests (skip integration)
+# Run only unit tests (explicitly skip integration)
 pytest -m "not integration" tests/
 ```
+
+### Integration Tests
+
+Integration tests verify the SDK works with the real Chainlink mainnet API. They require valid API credentials and network access.
+
+**Prerequisites:**
+- Valid Chainlink Data Streams API credentials (mainnet)
+- Network access to Chainlink API endpoints
+
+**Setup:**
+```bash
+# Set your API credentials
+export CHAINLINK_STREAMS_API_KEY="your-api-key"
+export CHAINLINK_STREAMS_API_SECRET="your-api-secret"
+```
+
+**Running Integration Tests:**
+```bash
+# Run all integration tests
+pytest -m integration tests/test_integration.py -v
+
+# Run all tests including integration tests
+pytest tests/ -v
+
+# Run specific integration test class
+pytest -m integration tests/test_integration.py::TestFetchSingleReportMainnet -v
+
+# Run specific integration test
+pytest -m integration tests/test_integration.py::TestFetchSingleReportMainnet::test_fetch_single_report_mainnet -v
+```
+
+**Integration Test Coverage:**
+- ✅ HTTP REST API calls to mainnet
+- ✅ Real report fetching and validation
+- ✅ Report decoding with real data
+- ✅ WebSocket connections to mainnet
+- ✅ Real-time report streaming
+- ✅ End-to-end workflows (fetch → decode → get prices)
+- ✅ Error handling with real API
+- ✅ Performance and reliability tests
+
+**Note:** Integration tests are automatically skipped if API credentials are not set. They are marked with `@pytest.mark.integration` and can be excluded from CI/CD pipelines if needed.
 
 ### Test Structure
 
 ```
 tests/
-├── test_constants.py    # 7 tests - Constants validation
-├── test_client.py       # 35 tests - Authentication & WebSocket connection
-├── test_decode.py       # 46 tests - Report decoding & price conversion
-├── test_report.py       # 30 tests - HTTP fetching & WebSocket streaming
-├── test_basic.py        # 5 tests - Basic integration tests
-└── conftest.py          # Shared fixtures and test utilities
+├── test_constants.py      # 7 tests - Constants validation
+├── test_client.py         # 35 tests - Authentication & WebSocket connection
+├── test_decode.py         # 46 tests - Report decoding & price conversion
+├── test_report.py         # 30 tests - HTTP fetching & WebSocket streaming
+├── test_basic.py          # 5 tests - Basic integration tests
+├── test_integration.py    # 15+ tests - Real mainnet API integration tests
+└── conftest.py            # Shared fixtures and test utilities
 ```
 
 See [`tests/TEST_OUTLINE.md`](tests/TEST_OUTLINE.md) for detailed test coverage documentation.
