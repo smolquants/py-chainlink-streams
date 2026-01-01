@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "py-chainlink-streams"
-version = "0.3.1"
+version = "0.3.2"
 description = "Unofficial lightweight Python SDK for Chainlink Data Streams API"
 readme = "README.md"
 requires-python = ">=3.9"

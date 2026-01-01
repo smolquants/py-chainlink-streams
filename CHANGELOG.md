@@ -5,7 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.1] - 2025-XX-XX
+## [0.3.2] - 2026-01-01
+
+### Fixed
+
+- **Status callback async support**: Fixed `stream_with_status_callback()` to properly support both synchronous and asynchronous status callbacks. Previously, async status callbacks would raise `RuntimeWarning: coroutine was never awaited`. Now the implementation checks if the callback is a coroutine function and awaits it appropriately, matching the behavior of the report callback.
+
+### Changed
+
+- **Status callback consistency**: Status callbacks now behave consistently with report callbacks - both support sync and async implementations
+- **Documentation**: Updated `stream_with_status_callback()` docstring to clarify that status callbacks can be sync or async
+
+## [0.3.1] - 2025-12-31
 
 ### Added
 
@@ -25,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **README improvements**: Enhanced testing section with Python version support and code coverage details
 - **Project metadata**: Professionalized `pyproject.toml` with proper PyPI classifiers and metadata
 
-## [0.3.0] - 2025-XX-XX
+## [0.3.0] - 2025-12-31
 
 ### Breaking Changes
 
@@ -59,7 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed test expectations to match actual API behavior for `get_latest_report` endpoint
 - Fixed integration test imports for `ReportPage` class
 
-## [0.2.0] - 2025-XX-XX
+## [0.2.0] - 2025-12-31
 
 ### Breaking Changes
 

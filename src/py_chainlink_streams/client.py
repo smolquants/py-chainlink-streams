@@ -377,7 +377,7 @@ class ChainlinkClient:
             feed_ids: List of feed IDs to subscribe to
             callback: Function to process each report (can be async or sync)
             status_callback: Optional function called on connection status changes.
-                           Signature: (is_connected: bool, host: str, origin: str) -> None
+                           Can be sync or async. Signature: (is_connected: bool, host: str, origin: str) -> None
         """
         stop_event = asyncio.Event()
         websocket = None
@@ -389,7 +389,10 @@ class ChainlinkClient:
             
             # Call status callback if provided
             if status_callback:
-                status_callback(True, self.config.ws_host, "")
+                if asyncio.iscoroutinefunction(status_callback):
+                    await status_callback(True, self.config.ws_host, "")
+                else:
+                    status_callback(True, self.config.ws_host, "")
             
             self.config._log(f"WebSocket connection established for feeds: {feed_ids}")
             
@@ -442,13 +445,19 @@ class ChainlinkClient:
         except Exception as e:
             self.config._log(f"Error in stream: {e}")
             if status_callback:
-                status_callback(False, self.config.ws_host, "")
+                if asyncio.iscoroutinefunction(status_callback):
+                    await status_callback(False, self.config.ws_host, "")
+                else:
+                    status_callback(False, self.config.ws_host, "")
             stop_event.set()
         finally:
             if websocket:
                 await websocket.close()
             if status_callback:
-                status_callback(False, self.config.ws_host, "")
+                if asyncio.iscoroutinefunction(status_callback):
+                    await status_callback(False, self.config.ws_host, "")
+                else:
+                    status_callback(False, self.config.ws_host, "")
             if ping_task:
                 ping_task.cancel()
                 try:

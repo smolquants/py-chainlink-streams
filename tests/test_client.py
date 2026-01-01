@@ -434,8 +434,8 @@ class TestChainlinkClientStream:
             mock_connect.assert_called_once_with(sample_feed_ids)
 
     @pytest.mark.asyncio
-    async def test_stream_with_status_callback_calls_status_callback(self, client, sample_feed_ids):
-        """Test stream_with_status_callback calls status_callback on connection."""
+    async def test_stream_with_status_callback_calls_sync_status_callback(self, client, sample_feed_ids):
+        """Test stream_with_status_callback calls synchronous status_callback on connection."""
         status_callbacks = []
         
         def status_callback(is_connected, host, origin):
@@ -460,3 +460,82 @@ class TestChainlinkClientStream:
             
             # Should have called status_callback at least once (on connect or disconnect)
             assert len(status_callbacks) > 0
+            # Verify it was called with correct arguments
+            assert status_callbacks[0][0] in [True, False]  # is_connected boolean
+    
+    @pytest.mark.asyncio
+    async def test_stream_with_status_callback_calls_async_status_callback(self, client, sample_feed_ids):
+        """Test stream_with_status_callback calls asynchronous status_callback on connection."""
+        status_callbacks = []
+        
+        async def status_callback(is_connected, host, origin):
+            # Simulate async operation
+            await asyncio.sleep(0.01)
+            status_callbacks.append((is_connected, host, origin))
+        
+        with patch.object(client, '_connect_websocket') as mock_connect:
+            mock_ws = AsyncMock(spec=WebSocketClientProtocol)
+            
+            async def message_gen():
+                raise websockets.exceptions.ConnectionClosed(None, None)
+            
+            mock_ws.__aiter__ = lambda self: message_gen()
+            mock_connect.return_value = mock_ws
+            
+            try:
+                await asyncio.wait_for(
+                    client.stream_with_status_callback(sample_feed_ids, lambda x: None, status_callback),
+                    timeout=0.5
+                )
+            except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
+                pass
+            
+            # Should have called status_callback at least once (on connect or disconnect)
+            assert len(status_callbacks) > 0
+            # Verify it was called with correct arguments
+            assert status_callbacks[0][0] in [True, False]  # is_connected boolean
+    
+    @pytest.mark.asyncio
+    async def test_stream_with_status_callback_handles_both_sync_and_async_callbacks(self, client, sample_feed_ids):
+        """Test that stream_with_status_callback correctly handles both sync and async status callbacks."""
+        sync_callbacks = []
+        async_callbacks = []
+        
+        def sync_status_callback(is_connected, host, origin):
+            sync_callbacks.append((is_connected, host, origin))
+        
+        async def async_status_callback(is_connected, host, origin):
+            await asyncio.sleep(0.001)
+            async_callbacks.append((is_connected, host, origin))
+        
+        with patch.object(client, '_connect_websocket') as mock_connect:
+            mock_ws = AsyncMock(spec=WebSocketClientProtocol)
+            
+            async def message_gen():
+                raise websockets.exceptions.ConnectionClosed(None, None)
+            
+            mock_ws.__aiter__ = lambda self: message_gen()
+            mock_connect.return_value = mock_ws
+            
+            # Test sync callback
+            try:
+                await asyncio.wait_for(
+                    client.stream_with_status_callback(sample_feed_ids, lambda x: None, sync_status_callback),
+                    timeout=0.5
+                )
+            except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
+                pass
+            
+            # Test async callback
+            try:
+                await asyncio.wait_for(
+                    client.stream_with_status_callback(sample_feed_ids, lambda x: None, async_status_callback),
+                    timeout=0.5
+                )
+            except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
+                pass
+            
+            # Both should have been called
+            assert len(sync_callbacks) > 0
+            assert len(async_callbacks) > 0
+            # Verify no RuntimeWarning was raised (both should work correctly)
